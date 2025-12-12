@@ -76,8 +76,8 @@ def get_neighbors(r, col="dist", barcodes=[], max_iterations=3349):
     return r
 
 
-def tissue_edge(pos, maxdist=2):
-    pos = pos.with_columns(pl.lit(None).cast(pl.UInt16).alias("tissue_edge_distance"))
+def capture_edge(pos, maxdist=2):
+    pos = pos.with_columns(pl.lit(None).cast(pl.UInt16).alias("capture_edge_distance"))
 
     pos = pos.with_columns(
         pl.when(
@@ -87,27 +87,29 @@ def tissue_edge(pos, maxdist=2):
             | (pl.col("array_col").eq(pl.col("array_col").max()))
         )
         .then(1)
-        .otherwise("tissue_edge_distance")
-        .alias("tissue_edge_distance"),
+        .otherwise("capture_edge_distance")
+        .alias("capture_edge_distance"),
     )
 
     for i in range(2, maxdist + 1):
         last_bc = (
-            neighbors(pos, "tissue_edge_distance").select(pl.col("barcode")).to_series()
+            neighbors(pos, "capture_edge_distance")
+            .select(pl.col("barcode"))
+            .to_series()
         )
         pos = pos.with_columns(
             pl.when(pl.col("barcode").is_in(last_bc.implode()))
             .then(maxdist)
-            .otherwise("tissue_edge_distance")
-            .alias("tissue_edge_distance")
+            .otherwise("capture_edge_distance")
+            .alias("capture_edge_distance")
         )
 
     return pos
 
 
 def blade(pos):
-    pos = tissue_edge(pos, maxdist=2)
-    pos = get_neighbors(pos, 
+    pos = capture_edge(pos, maxdist=2)
+    pos = get_neighbors(pos, col="tissue_edge", max_iterations=1)
 
     return pos
 
@@ -117,12 +119,12 @@ def setup(pos):
     setup, primarily used in debugging/development
     appends a columm called cdist to pos
     """
- #  result = pos.with_columns(
- #      pl.when(pl.col("in_tissue") == 0).then(0).cast(pl.UInt16).alias("cdist"),
-#                       )
+    #  result = pos.with_columns(
+    #      pl.when(pl.col("in_tissue") == 0).then(0).cast(pl.UInt16).alias("cdist"),
+    #                       )
     pos = pl.read_parquet(
-    "tissue_positions.parquet",
-    columns=["barcode", "array_row", "array_col", "in_tissue"],
+        "tissue_positions.parquet",
+        columns=["barcode", "array_row", "array_col", "in_tissue"],
     )
     return result
 
