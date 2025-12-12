@@ -109,12 +109,20 @@ def capture_edge(pos, maxdist=2):
 
 def blade(pos):
     pos = capture_edge(pos, maxdist=2)
-    pos = get_neighbors(pos, col="tissue_edge", max_iterations=1)
+    pos = get_neighbors(pos, col="tissue_edge_distance", max_iterations=1)
+    pos = pos.with_columns(
+        pl.when(
+            pl.col("capture_edge_distance").gt(0) | pl.col("tissue_edge_distance").gt(0)
+        )
+        .then(1)
+        .otherwise(0)
+        .alias("blade")
+    )
 
     return pos
 
 
-def setup(pos):
+def setup():
     """
     setup, primarily used in debugging/development
     appends a columm called cdist to pos
@@ -126,26 +134,33 @@ def setup(pos):
         "tissue_positions.parquet",
         columns=["barcode", "array_row", "array_col", "in_tissue"],
     )
-    return result
+    return pos
 
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
-        # basically a debug/development situation
-        pos = pl.read_parquet(
-            "tissue_positions.parquet",
-            columns=["barcode", "array_row", "array_col", "in_tissue"],
-        )
+        print("""
+              blade.py
+              Usage:
+                python blade.py [infile | directory] <outfile>
+                Takes either a tissue_positions.parquet file or a directory containing one.
+                if no outfile is specified, will create/overwrite a tissue_positions_bladed.parquet
+                file in the given directory or same directory as the input file.
 
-    #    bc = pos.filter(pl.col("in_tissue") == 0).select(pl.col("barcode")).to_series()
-    # r = setup(pos)
+
+              Currently only working on visium hd files
+              """)
     else:
         infile = Path(sys.argv[1])
-        if infile.is_dir:
+        if infile.is_dir():
             infile /= "spatial/tissue_positions.parquet"
         if not infile.exists():
             ValueError("Non-existent source file or directory")
         if len(sys.argv) > 2:
-            outfile = infile.parent / "tissue_positions_bladed.parquet"
-        else:
             outfile = Path(sys.argv[2])
+        else:
+            outfile = infile.parent / "tissue_positions_bladed.parquet"
+        print(f"infile: {infile}\noutfile:{outfile}")
+        pos = pl.read_parquet(infile)
+        bladed = blade(pos).drop(["capture_edge_distance", "tissue_edge_distance"])
+        bladed.write_parquet(outfile)
