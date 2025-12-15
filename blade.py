@@ -155,7 +155,7 @@ if __name__ == "__main__":
     else:
         infile = Path(sys.argv[1])
         if infile.is_dir():
-            infile /= "spatial/tissue_positions.parquet"
+            infile /= "tissue_positions.parquet"
         if not infile.exists():
             ValueError("Non-existent source file or directory")
         if len(sys.argv) > 2:
