@@ -62,7 +62,7 @@ def get_neighbors(r, col="dist", barcodes=[], max_iterations=3349, show_progress
             )
         )
 
-    for _ in tqdm(range(max_iterations), display=show_progress):
+    for _ in tqdm(range(max_iterations), disable=show_progress):
         if len(r.filter(pl.col(col).is_null())) == 0:
             continue
         max_dist = r.select(pl.col(col).max()).item()
@@ -76,7 +76,7 @@ def get_neighbors(r, col="dist", barcodes=[], max_iterations=3349, show_progress
     return r
 
 
-def capture_edge(pos, maxdist=2):
+def capture_edge(pos, maxdist=2, show_progress=True):
     pos = pos.with_columns(pl.lit(None).cast(pl.UInt16).alias("capture_edge_distance"))
 
     pos = pos.with_columns(
@@ -93,7 +93,7 @@ def capture_edge(pos, maxdist=2):
 
     for i in range(2, maxdist + 1):
         last_bc = (
-            neighbors(pos, "capture_edge_distance")
+            neighbors(pos, "capture_edge_distance", show_progress=show_progress)
             .select(pl.col("barcode"))
             .to_series()
         )
@@ -107,10 +107,10 @@ def capture_edge(pos, maxdist=2):
     return pos
 
 
-def blade(pos):
-    pos = capture_edge(pos, maxdist=2)
+def blade(pos, show_progress=False):
+    pos = capture_edge(pos, maxdist=2, show_progress=show_progress)
     pos = get_neighbors(
-        pos, col="tissue_edge_distance", max_iterations=1, show_progress=False
+        pos, col="tissue_edge_distance", max_iterations=1, show_progress=show_progress
     )
     pos = pos.with_columns(
         pl.when(
