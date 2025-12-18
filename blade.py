@@ -53,13 +53,10 @@ def get_neighbors(r, col="dist", barcodes=[], max_iterations=3349, show_progress
         )
     else:
         r = r.with_columns(
-            pl.when(
-                pl.col("barcode")
-                .is_in(pl.Series(barcodes).implode())
-                .then(0)
-                .cast(pl.UInt16)
-                .alias(col)
-            )
+            pl.when(pl.col("barcode").is_in(pl.Series(barcodes).implode()))
+            .then(0)
+            .cast(pl.UInt16)
+            .alias(col)
         )
 
     for _ in tqdm(range(max_iterations), disable=not show_progress):
