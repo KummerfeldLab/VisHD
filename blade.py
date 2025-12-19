@@ -60,7 +60,9 @@ def get_neighbors(r, col="dist", barcodes=[], max_iterations=3349, show_progress
         )
 
     for _ in tqdm(range(max_iterations), disable=not show_progress):
-        if len(r.filter(pl.col(col).is_null())) == 0:
+        if (len(r.filter(pl.col(col).is_null())) == 0) or (
+            len(r.filter(pl.col(col).is_not_null())) == 0
+        ):
             continue
         max_dist = r.select(pl.col(col).max()).item()
         last_bc = neighbors(r, col).select(pl.col("barcode")).to_series()
