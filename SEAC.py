@@ -63,7 +63,7 @@ def seac_distance(adata, pos):
             r.filter(
                 pl.all_horizontal(
                     pl.col(
-                        ["SEAC", "EMC", "Anti_Apoptotic", "Cell_Cycle_Related"]
+                        ["SASP", "EMC", "Anti_Apoptotic", "Cell_Cycle_Related"]
                     ).is_null()
                 )
             )
@@ -122,3 +122,4 @@ def seac_distance(adata, pos):
             .otherwise(pl.col("Cell_Cycle_Related"))
             .alias("Cell_Cycle_Related"),
         )
+    return r
