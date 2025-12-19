@@ -1,6 +1,6 @@
 import polars as pl
 from tqdm import tqdm
-from VisHD import blade
+from VisHD import Adipose, blade
 
 SEAC = {
     "SASP": ["IL1B", "IL6", "CCL7", "CXCL8", "CCL2", "CXCL2", "CD55"],
@@ -26,7 +26,31 @@ SEAC = {
 }
 
 
+def make_maxMin(p):
+    """given path p, read in counts and positions and save a
+    modified positions table to a dir"""
+    print(p.name)
+    subdir = "outs/binned_outputs/square_002um"
+    adata, pos = Adipose.read_sample(p / subdir)
+    r = blade.blade(pos)
+    excluded_bc = (
+        r.filter(pl.col("blade") == 1).select(pl.col("barcode")).to_series().to_list()
+    )
+
+    for k, v in SEAC.SEAC.items():
+        print(k)
+        subtable = adata[:, v]
+        bc = subtable[subtable.X.sum(axis=1) > 0].obs.index.to_list()
+        bc = [x for x in bc if x not in excluded_bc]
+        if len(bc) == 0:
+            continue
+        r = blade.get_neighbors(r, col=k, barcodes=bc)
+    r = r.with_columns(pl.max_horizontal(SEAC.SEAC.keys()).alias("MaxMin"))
+    r.write_parquet(f"Data/{p.name}_bladed.parquet")
+
+
 def seac_distance(adata, pos):
+    """NOT TESTED"""
     sasp_adata = adata[:, SEAC["SASP"]]
     emc_adata = adata[:, SEAC["EMC"]]
     antiapop_adata = adata[:, SEAC["Anti_Apoptotic"]]
