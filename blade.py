@@ -111,7 +111,7 @@ def blade(pos, show_progress=False):
     )
     pos = pos.with_columns(
         pl.when(
-            pl.col("capture_edge_distance").gt(0) | pl.col("tissue_edge_distance").gt(0)
+            pl.col("capture_edge_distance").ge(0) | pl.col("tissue_edge_distance").ge(0)
         )
         .then(1)
         .otherwise(0)
