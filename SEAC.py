@@ -1,8 +1,36 @@
 import polars as pl
 from tqdm import tqdm
 from VisHD import Adipose, blade
+from pathlib import Path
 
-SEAC = {
+
+SEAC260314 = {
+    "SASP": ["IL1B", 
+             "IL6", 
+             "CXCL12",
+             "CCL2", 
+             "CXCL8",
+             "TGFB1",
+             "VEGFA"],
+    "EMC": ["PLAUR", "PLAU", "PAPPA", "MMP14", "ADAMTS4", "COL6A1", "THBS1"],
+    "Anti_Apoptotic": [
+        "SERPINE1",
+        "SERPINB2",
+        "SERPINE2",
+        "BCL2L1",
+        "MCL1",
+        "BCL2",
+    ],
+    "Cell_Cycle_Related": [
+        "CDKN1A",
+        "TP53",
+        "GADD45A",
+        "CDKN2A",
+        "GADD45B",
+    ],
+}
+
+old_SEAC = {
     "SASP": ["IL1B", "IL6", "CCL7", "CXCL8", "CCL2", "CXCL2", "CD55"],
     "EMC": ["PLAUR", "PLAU", "TNC", "VCAM1", "ADAMTS4", "TMEM217", "ICAM4"],
     "Anti_Apoptotic": [
@@ -26,7 +54,9 @@ SEAC = {
 }
 
 
-def make_maxMin(p):
+SEAC = SEAC260314
+
+def make_maxMin(p, outdir=Path.home() / 'Projects/Adipose/TissuePositions260314/', show_progress=True):
     """given path p, read in counts and positions and save a
     modified positions table to a dir"""
     print(p.name)
@@ -37,16 +67,20 @@ def make_maxMin(p):
         r.filter(pl.col("blade") == 1).select(pl.col("barcode")).to_series().to_list()
     )
 
-    for k, v in SEAC.SEAC.items():
-        print(k)
-        subtable = adata[:, v]
+    for k, v in SEAC.items():
+        print('\t', k)
+        goodgenes = [g for g in v if g in adata.var_names]
+        print('\tGood:', goodgenes)
+        badgenes = [g for g in v if g not in adata.var_names]
+        print('\tBad:', badgenes)
+        subtable = adata[:, goodgenes]
         bc = subtable[subtable.X.sum(axis=1) > 0].obs.index.to_list()
         bc = [x for x in bc if x not in excluded_bc]
         if len(bc) == 0:
             continue
-        r = blade.get_neighbors(r, col=k, barcodes=bc)
-    r = r.with_columns(pl.max_horizontal(SEAC.SEAC.keys()).alias("MaxMin"))
-    r.write_parquet(f"Data/{p.name}_bladed.parquet")
+        r = blade.get_neighbors(r, col=k, barcodes=bc, show_progress=show_progress)
+    r = r.with_columns(pl.max_horizontal(SEAC.keys()).alias("MaxMin"))
+    r.write_parquet(outdir / f"{p.name}_bladed.parquet")
 
 
 def seac_distance(adata, pos):
