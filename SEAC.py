@@ -81,3 +81,40 @@ def make_maxMin(p, outdir=Path.home() / 'Projects/Adipose/TissuePositions260314/
         r = blade.get_neighbors(r, col=k, barcodes=bc, show_progress=show_progress)
     r = r.with_columns(pl.max_horizontal(SEAC.keys()).alias("MaxMin"))
     r.write_parquet(outdir / f"{p.name}_bladed.parquet")
+
+
+def read_annotations(sdir):
+    annotations_dir = Path.cwd() / 'mythili_visiumhd_folder'
+    # Find cell annotations
+    for anndir in annotations_dir.iterdir():
+        if 'adults' not in anndir.name:
+            continue
+        for sample_ann in anndir.iterdir():
+            if sdir.name in sample_ann.name:
+                print('-->', sample_ann)
+                return pl.read_csv(sample_ann / 'Graph-Based.csv')
+
+def get_mapping_and_annotations(sdir):
+    mapping = pl.read_parquet(sdir / mapping_f)
+    ann = read_annotations(sdir)
+    return mapping, ann
+    
+def get_sample_and_annotations(sdir):
+    # Read in mapping file
+    mapping = pl.read_parquet(sdir / mapping_f)
+    ann = read_annotations(sdir)
+    
+    bladed = pl.read_parquet(bladed_d / f'{sdir.name}_bladed.parquet')
+    maxmin = maxmin.with_columns(pl.lit('None').alias('Celltype'))
+    ctype_col = ann.columns[-1]
+    for ctype in ann[ctype_col].unique().to_list():
+        cell_ids = ann.filter(pl.col(ctype_col).eq(ctype))['Barcode'].to_list()
+        spots = mapping.filter(pl.col('cell_id').is_in(cell_ids))['square_002um'].to_list()
+        maxmin = maxmin.with_columns(pl.when(pl.col('barcode').is_in(spots))
+            .then(pl.lit(ctype))
+            .otherwise(pl.col('Celltype'))
+            .alias('Celltype'))
+    maxmin = maxmin.with_columns(pl.lit(sdir.name).alias('Sample'))
+    maxmin = maxmin.filter(pl.col('Celltype').ne('None'))
+    maxmin = maxmin[['barcode', 'MaxMin', 'Celltype', 'Sample']]
+    return maxmin
