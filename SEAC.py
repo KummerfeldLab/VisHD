@@ -1,6 +1,6 @@
 import polars as pl
 from tqdm import tqdm
-from VisHD import Adipose, blade
+from VisHD import Adipose, blade, local
 from pathlib import Path
 
 
@@ -56,7 +56,7 @@ old_SEAC = {
 
 SEAC = SEAC260314
 
-def make_maxMin(p, outdir=Path.home() / 'Projects/Adipose/TissuePositions260314/', show_progress=True):
+def make_maxMin(p, categories=SEAC, outdir=local.MaxMin_d, show_progress=True):
     """given path p, read in counts and positions and save a
     modified positions table to a dir"""
     print(p.name)
@@ -67,7 +67,7 @@ def make_maxMin(p, outdir=Path.home() / 'Projects/Adipose/TissuePositions260314/
         r.filter(pl.col("blade") == 1).select(pl.col("barcode")).to_series().to_list()
     )
 
-    for k, v in SEAC.items():
+    for k, v in categories.items():
         print('\t', k)
         goodgenes = [g for g in v if g in adata.var_names]
         print('\tGood:', goodgenes)
@@ -79,13 +79,13 @@ def make_maxMin(p, outdir=Path.home() / 'Projects/Adipose/TissuePositions260314/
         if len(bc) == 0:
             continue
         r = blade.get_neighbors(r, col=k, barcodes=bc, show_progress=show_progress)
-    r = r.with_columns(pl.max_horizontal(SEAC.keys()).alias("MaxMin"))
+    r = r.with_columns(pl.max_horizontal(categories.keys()).alias("MaxMin"))
     r.write_parquet(outdir / f"{p.name}_bladed.parquet")
 
 
-def read_annotations(sdir):
-    annotations_dir = Path.cwd() / 'mythili_visiumhd_folder'
-    # Find cell annotations
+def read_annotations(sdir, annotations_dir=local.annotations_dir):
+    """ Find cell annotations that could be in one of several directories
+        and have various names. """
     for anndir in annotations_dir.iterdir():
         if 'adults' not in anndir.name:
             continue
@@ -94,18 +94,14 @@ def read_annotations(sdir):
                 print('-->', sample_ann)
                 return pl.read_csv(sample_ann / 'Graph-Based.csv')
 
-def get_mapping_and_annotations(sdir):
-    mapping = pl.read_parquet(sdir / mapping_f)
-    ann = read_annotations(sdir)
-    return mapping, ann
-    
 def get_sample_and_annotations(sdir):
-    # Read in mapping file
+    """ Adds celltyping to the positions file """
+    mapping_f = 'outs/barcode_mappings.parquet'
     mapping = pl.read_parquet(sdir / mapping_f)
     ann = read_annotations(sdir)
     
-    bladed = pl.read_parquet(bladed_d / f'{sdir.name}_bladed.parquet')
-    maxmin = maxmin.with_columns(pl.lit('None').alias('Celltype'))
+    bladed = pl.read_parquet(local.bladed_d / f'{sdir.name}_bladed.parquet')
+    maxmin = bladed.with_columns(pl.lit('None').alias('Celltype'))
     ctype_col = ann.columns[-1]
     for ctype in ann[ctype_col].unique().to_list():
         cell_ids = ann.filter(pl.col(ctype_col).eq(ctype))['Barcode'].to_list()
@@ -116,5 +112,5 @@ def get_sample_and_annotations(sdir):
             .alias('Celltype'))
     maxmin = maxmin.with_columns(pl.lit(sdir.name).alias('Sample'))
     maxmin = maxmin.filter(pl.col('Celltype').ne('None'))
-    maxmin = maxmin[['barcode', 'MaxMin', 'Celltype', 'Sample']]
+#   maxmin = maxmin[['barcode', 'MaxMin', 'Celltype', 'Sample']]
     return maxmin
