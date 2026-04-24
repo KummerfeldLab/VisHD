@@ -1,17 +1,10 @@
 import polars as pl
 from tqdm import tqdm
-from VisHD import Adipose, blade, local
-from pathlib import Path
-
+from VisHD import Adipose, blade
+import scanpy as sc
 
 SEAC260314 = {
-    "SASP": ["IL1B", 
-             "IL6", 
-             "CXCL12",
-             "CCL2", 
-             "CXCL8",
-             "TGFB1",
-             "VEGFA"],
+    "SASP": ["IL1B", "IL6", "CXCL12", "CCL2", "CXCL8", "TGFB1", "VEGFA"],
     "EMC": ["PLAUR", "PLAU", "PAPPA", "MMP14", "ADAMTS4", "COL6A1", "THBS1"],
     "Anti_Apoptotic": [
         "SERPINE1",
@@ -56,61 +49,130 @@ old_SEAC = {
 
 SEAC = SEAC260314
 
-def make_maxMin(p, categories=SEAC, outdir=local.MaxMin_d, show_progress=True):
+
+def make_maxMin(p, outdir, show_progress=True):
     """given path p, read in counts and positions and save a
     modified positions table to a dir"""
     print(p.name)
     subdir = "outs/binned_outputs/square_002um"
     adata, pos = Adipose.read_sample(p / subdir)
+    sc.
     r = blade.blade(pos)
     excluded_bc = (
         r.filter(pl.col("blade") == 1).select(pl.col("barcode")).to_series().to_list()
     )
 
-    for k, v in categories.items():
-        print('\t', k)
+    for k, v in SEAC.items():
+        print("\t", k)
         goodgenes = [g for g in v if g in adata.var_names]
-        print('\tGood:', goodgenes)
+        print("\tGood:", goodgenes)
         badgenes = [g for g in v if g not in adata.var_names]
-        print('\tBad:', badgenes)
+        print("\tBad:", badgenes)
         subtable = adata[:, goodgenes]
         bc = subtable[subtable.X.sum(axis=1) > 0].obs.index.to_list()
         bc = [x for x in bc if x not in excluded_bc]
         if len(bc) == 0:
             continue
         r = blade.get_neighbors(r, col=k, barcodes=bc, show_progress=show_progress)
-    r = r.with_columns(pl.max_horizontal(categories.keys()).alias("MaxMin"))
+    r = r.with_columns(pl.max_horizontal(SEAC.keys()).alias("MaxMin"))
     r.write_parquet(outdir / f"{p.name}_bladed.parquet")
 
 
-def read_annotations(sdir, annotations_dir=local.annotations_dir):
-    """ Find cell annotations that could be in one of several directories
-        and have various names. """
-    for anndir in annotations_dir.iterdir():
-        if 'adults' not in anndir.name:
-            continue
-        for sample_ann in anndir.iterdir():
-            if sdir.name in sample_ann.name:
-                print('-->', sample_ann)
-                return pl.read_csv(sample_ann / 'Graph-Based.csv')
+def seac_distance(adata, pos):
+    """NOT TESTED"""
+    sasp_adata = adata[:, SEAC["SASP"]]
+    emc_adata = adata[:, SEAC["EMC"]]
+    antiapop_adata = adata[:, SEAC["Anti_Apoptotic"]]
+    ccr_adata = adata[:, SEAC["Cell_Cycle_Related"]]
 
-def get_sample_and_annotations(sdir):
-    """ Adds celltyping to the positions file """
-    mapping_f = 'outs/barcode_mappings.parquet'
-    mapping = pl.read_parquet(sdir / mapping_f)
-    ann = read_annotations(sdir)
-    
-    bladed = pl.read_parquet(local.bladed_d / f'{sdir.name}_bladed.parquet')
-    maxmin = bladed.with_columns(pl.lit('None').alias('Celltype'))
-    ctype_col = ann.columns[-1]
-    for ctype in ann[ctype_col].unique().to_list():
-        cell_ids = ann.filter(pl.col(ctype_col).eq(ctype))['Barcode'].to_list()
-        spots = mapping.filter(pl.col('cell_id').is_in(cell_ids))['square_002um'].to_list()
-        maxmin = maxmin.with_columns(pl.when(pl.col('barcode').is_in(spots))
-            .then(pl.lit(ctype))
-            .otherwise(pl.col('Celltype'))
-            .alias('Celltype'))
-    maxmin = maxmin.with_columns(pl.lit(sdir.name).alias('Sample'))
-    maxmin = maxmin.filter(pl.col('Celltype').ne('None'))
-#   maxmin = maxmin[['barcode', 'MaxMin', 'Celltype', 'Sample']]
-    return maxmin
+    sasp_bc = sasp_adata[sasp_adata.X.sum(axis=1) > 0].obs.index.to_list()
+    emc_bc = sasp_adata[emc_adata.X.sum(axis=1) > 0].obs.index.to_list()
+    antiapop_bc = antiapop_adata[antiapop_adata.X.sum(axis=1) > 0].obs.index.to_list()
+    ccr_bc = ccr_adata[ccr_adata.X.sum(axis=1) > 0].obs.index.to_list()
+
+    r = blade.blade(pos)
+    r = r.filter(pl.col("blade") == 0)
+    r = r.with_columns(
+        pl.when(pl.col("barcode").is_in(pl.Series(sasp_bc).implode()))
+        .then(0)
+        .cast(pl.UInt16)
+        .alias("SASP"),
+        pl.when(pl.col("barcode").is_in(pl.Series(emc_bc).implode()))
+        .then(0)
+        .cast(pl.UInt16)
+        .alias("EMC"),
+        pl.when(pl.col("barcode").is_in(pl.Series(antiapop_bc).implode()))
+        .then(0)
+        .cast(pl.UInt16)
+        .alias("Anti_Apoptotic"),
+        pl.when(pl.col("barcode").is_in(pl.Series(ccr_bc).implode()))
+        .then(0)
+        .cast(pl.UInt16)
+        .alias("Cell_Cycle_Related"),
+    )
+
+    for _ in tqdm(range(8000)):
+        null_sum = len(
+            r.filter(
+                pl.all_horizontal(
+                    pl.col(
+                        ["SASP", "EMC", "Anti_Apoptotic", "Cell_Cycle_Related"]
+                    ).is_null()
+                )
+            )
+        )
+        if null_sum == 0:
+            continue
+
+        sasp_max = r.select(pl.col("SASP").max()).item()
+        emc_max = r.select(pl.col("EMC").max()).item()
+        antiapop_max = r.select(pl.col("Anti_Apoptotic").max()).item()
+        ccr_max = r.select(pl.col("Cell_Cycle_Related").max()).item()
+
+        r = r.with_columns(
+            pl.when(
+                pl.col("barcode").is_in(
+                    blade.neighbors(r, "SASP")
+                    .select(pl.col("barcode"))
+                    .to_series()
+                    .implode()
+                )
+            )
+            .then(sasp_max + 1)
+            .otherwise(pl.col("SASP"))
+            .alias("SASP"),
+            pl.when(
+                pl.col("barcode").is_in(
+                    blade.neighbors(r, "EMC")
+                    .select(pl.col("barcode"))
+                    .to_series()
+                    .implode()
+                )
+            )
+            .then(emc_max + 1)
+            .otherwise(pl.col("EMC"))
+            .alias("EMC"),
+            pl.when(
+                pl.col("barcode").is_in(
+                    blade.neighbors(r, "Anti_Apoptotic")
+                    .select(pl.col("barcode"))
+                    .to_series()
+                    .implode()
+                )
+            )
+            .then(antiapop_max + 1)
+            .otherwise(pl.col("Anti_Apoptotic"))
+            .alias("Anti_Apoptotic"),
+            pl.when(
+                pl.col("barcode").is_in(
+                    blade.neighbors(r, "Cell_Cycle_Related")
+                    .select(pl.col("barcode"))
+                    .to_series()
+                    .implode()
+                )
+            )
+            .then(ccr_max + 1)
+            .otherwise(pl.col("Cell_Cycle_Related"))
+            .alias("Cell_Cycle_Related"),
+        )
+    return r
