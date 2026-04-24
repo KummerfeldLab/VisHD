@@ -4,10 +4,10 @@ from pathlib import Path
 import polars as pl
 from tqdm import tqdm
 
-neighbor_set = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+HD_neighbor_set = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 
-def neighbors(pos, col):
+def neighbors(pos, col, neighbor_set=HD_neighbor_set):
     max_dist = pos.select(pl.col(col).max()).item()
     rights = []
     for x, y in neighbor_set:
