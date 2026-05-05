@@ -1,5 +1,12 @@
-import cv2 as cv
+import os
+os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,41).__str__()
+from VisHD.SEAC import SEAC
 import polars as pl
+import matplotlib.pyplot as plt
+from pathlib import Path
+import cv2 as cv
+import VisHD.Visualize as viz
+#from sklearn.cluster import KMeans
 
 # overlay = np.zeros_like(gs_img, np.uint8)
 ROWDIFF = 5
@@ -7,6 +14,23 @@ COLDIFF = 5
 LIGHTBLUE = (173, 216, 230)
 BLUE = (65, 105, 255)
 RED = (255, 20, 147)
+
+colors = {
+    'SASP': (00, 209, 28),
+    'EMC': (0, 77, 209),
+    'Anti_Apoptotic': (209, 0, 181),
+    'Cell_Cycle_Related': (209, 132, 0)}
+
+
+def make_seac_image(ann, pos, img):
+    overlay = img.copy()
+    for k,v in SEAC.items():
+        subtable = ann[:, v]
+        barcodes = subtable[subtable.X.sum(axis=1) > 0].obs.index.to_list()
+        seac_positions = pos.filter(pl.col('barcode').is_in(barcodes))
+        viz.draw_spots(overlay, seac_positions, colors[k], sidelength=40)
+    return overlay
+#   return cv.addWeighted(img, 0.4, overlay, 0.55, 0.05)
 
 
 def draw_spots(overlay, pos, color, sidelength=5):
