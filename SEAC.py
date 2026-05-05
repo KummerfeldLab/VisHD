@@ -1,3 +1,4 @@
+import warnings
 import polars as pl
 from tqdm import tqdm
 from VisHD import Adipose, blade
@@ -49,14 +50,29 @@ old_SEAC = {
 
 SEAC = SEAC260314
 
+def read_sample(sampledir, set_barcode_as_index=False):
+    """reads the h5 file as anndata and the positions_file as a pandas DataFrame and returns both"""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        adata = sc.read_10x_h5(sampledir / "filtered_feature_bc_matrix.h5")
+        adata.var_names_make_unique()
 
-def make_maxMin(p, outdir, show_progress=True):
+    pos = pl.read_parquet(sampledir / "spatial/tissue_positions.parquet")
+    #   pos.array_row = pos.array_row.astype(int)
+    #   pos.array_col = pos.array_col.astype(int)
+
+    #   if set_barcode_as_index:
+    #       pos.set_index("barcode", inplace=True)
+    return adata, pos
+
+def make_bladed_maxMin_positionsFiles(p, outdir, show_progress=True):
     """given path p, read in counts and positions and save a
     modified positions table to a dir"""
     print(p.name)
     subdir = "outs/binned_outputs/square_002um"
-    adata, pos = Adipose.read_sample(p / subdir)
-    sc.
+#   adata, pos = Adipose.read_sample(p / subdir)
+    adata, pos = read_sample(p / subdir)
+    sc.experimental.pp.normalize_pearson_residuals(adata, inplace=True, copy=False, check_values=False)
     r = blade.blade(pos)
     excluded_bc = (
         r.filter(pl.col("blade") == 1).select(pl.col("barcode")).to_series().to_list()
