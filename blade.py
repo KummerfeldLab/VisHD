@@ -46,6 +46,16 @@ def neighbors(pos, col, neighbor_set=HD_neighbor_set):
 
 
 def get_neighbors(r, col="dist", barcodes=[], max_iterations=3349, show_progress=True):
+    """
+    returns the distance of all spots to a set of barcodes
+
+    parameters:
+        r: a Visium positions dataframe
+        col: the name of a new column to contain the spot distance
+        barcodes: the starting neighbors
+        max_iterations: the maximum number of times to run the distance calculation
+        show_progress: whether or not to show a progress bar
+    """
     assert type(barcodes) is list
     if len(barcodes) == 0:
         r = r.with_columns(
