@@ -47,6 +47,7 @@ def evaluate_permutation(long_form, positions, newcolname="MaxMin"):
 
 
 def multiprocessing_neighbors(start_spots, pos, category, q):
+    """ Not Tested. """
     print(category)
     cat_distance = blade.get_neighbors(
         pos, col=category, barcodes=start_spots, show_progress=False
@@ -56,6 +57,7 @@ def multiprocessing_neighbors(start_spots, pos, category, q):
 
 def multiprocessing_evaluate_permutation(long_form, positions):
     """
+    NOT READY FOR PRIME TIME
     uses long_form to create a new permutation instance, finds the barcodes
     where the permuted genes of each category occur, and evalutes the neighbor
     distance and a new MaxMin score
