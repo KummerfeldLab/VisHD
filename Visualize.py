@@ -1,6 +1,7 @@
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,41).__str__()
 from VisHD.SEAC import SEAC
+from VisHD import local
 import polars as pl
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -23,6 +24,8 @@ colors = {
 
 
 def make_seac_image(ann, pos, img):
+    """ returns a copy of an tissue image annotated an image with 
+    dots added where gene reads are round, colored by gene category """
     overlay = img.copy()
     for k,v in SEAC.items():
         subtable = ann[:, v]
@@ -34,6 +37,10 @@ def make_seac_image(ann, pos, img):
 
 
 def draw_spots(overlay, pos, color, sidelength=5):
+    """ annotates IN PLACE an opencv2 image by drawing squares of color `color`
+    over each barcode in pos.
+    `pos` is a tissue_positions.parquet file limited to only the rows 
+    which are to be colored. """
     assert len(color) == 3
 
     filtered = pos.with_columns(
@@ -51,3 +58,42 @@ def draw_spots(overlay, pos, color, sidelength=5):
     for (x1, y1), (x2, y2) in filtered.iter_rows():
         cv.rectangle(overlay, (int(x1), int(y1)), (int(x2), int(y2)), color, cv.FILLED)
 
+
+def make_annotated_image(samplename, positions):
+    """ returns an annotated image
+
+    parameters:
+    ----------
+        samplename: the name of a sample.
+        positions: the rows of a polars dataframe read from a 
+            tissue_positions.parquet file that are to be highlighted
+
+    Code example to save a file:
+    ------
+       ```
+        import matplotlib.pyplot as plt
+        plt.axis('off')
+        plt.title(name + 'Region <= .025 ')
+        plt.imshow(final)
+        plt.savefig(outdir / f"{name}.png")
+        ```
+    """
+ 
+    tif_ext = 'outs/spatial'
+    tif_d = local.spaceranger_outputs_dir / samplename / tif_ext
+    for tif_f in (tif_d).iterdir():
+        if 'tif' != tif_f.name[-3:]:
+            continue
+        break
+    tif = cv.cvtColor(cv.cvtColor(cv.imread(tif_f), cv.COLOR_BGR2GRAY), cv.COLOR_GRAY2RGB)
+    overlay = tif.copy()
+    viz.draw_spots(overlay, positions, (209, 0, 181), 40)
+    xmin = int(positions.select(pl.col('pxl_row_in_fullres').min()).item())
+    ymin = int(positions.select(pl.col('pxl_col_in_fullres').min()).item())
+    xmax = int(positions.select(pl.col('pxl_row_in_fullres').max()).item())
+    ymax = int(positions.select(pl.col('pxl_col_in_fullres').max()).item())
+    final = cv.addWeighted(tif, .6, overlay, 0.4, 0)
+    final = final[ymin-50 : ymax+50, xmin - 50 : xmax + 50]
+
+    del tif, overlay
+    return final
