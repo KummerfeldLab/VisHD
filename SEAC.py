@@ -97,7 +97,8 @@ def make_bladed_maxMin_positionsFiles(p, outdir, show_progress=True):
         print("\tBad:", badgenes)
         subtable = adata[:, goodgenes]
         bc = subtable[subtable.X.sum(axis=1) > 0].obs.index.to_list()
-        bc = [x for x in bc if x not in excluded_bc]
+#       bc = [x for x in bc if x not in excluded_bc]
+        bc = list(set(bc).difference(excluded_bc))
         if len(bc) == 0:
             continue
         r = blade.get_neighbors(r, col=k, barcodes=bc, show_progress=show_progress)

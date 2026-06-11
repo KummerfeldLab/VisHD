@@ -17,16 +17,16 @@ def permute_SEAC_sample(sampledir, start=0, end=50):
     result = None
     for i in range(start, end):
         if result is None:
-            result = evaluate_permutation(long_form, positions, str(i))
+            result = evaluate_permutation(long_form, positions, str(i), seed=i)
         else:
             result = result.join(
-                evaluate_permutation(long_form, positions, str(i)), on="barcode"
+                evaluate_permutation(long_form, positions, str(i), seed=i), on="barcode"
             )
 
     return result
 
 
-def evaluate_permutation(long_form, positions, newcolname="MaxMin"):
+def evaluate_permutation(long_form, positions, newcolname="MaxMin", seed=None):
     """
     uses long_form to create a new permutation instance, finds the barcodes
     where the permuted genes of each category occur, and evalutes the neighbor
@@ -34,11 +34,11 @@ def evaluate_permutation(long_form, positions, newcolname="MaxMin"):
 
     returns a new polars dataframe with columns [`barcode`, `MaxMin`]
     """
-    long_form = long_form.with_columns(pl.col("gene").shuffle().alias("gene"))
+    long_form = long_form.with_columns(pl.col("gene").shuffle(seed=seed).alias("gene"))
     for category, genes in SEAC.SEAC.items():
         start_spots = long_form.filter(pl.col("gene").is_in(genes))["barcode"].unique()
         positions = blade.get_neighbors(
-            positions, col=category, barcodes=list(start_spots), show_progress=True
+            positions, col=category, barcodes=list(start_spots), show_progress=False
         )
     positions = positions.with_columns(
         pl.max_horizontal(SEAC.SEAC.keys()).alias(newcolname)
