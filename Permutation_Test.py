@@ -26,6 +26,45 @@ def permute_SEAC_sample(sampledir, start=0, end=50):
     return result
 
 
+def permute_all_samples(sampledir, seed=None):
+    long_form = None
+    all_pos = None
+
+    # Build up data structure
+    for sample in sampledir.iterdir():
+        if not sample.is_dir():
+            continue
+        adata, pos = read_basedata(sample)
+        lf = adata2longform(adata, pos)
+        lf = lf.with_columns(pl.lit(sample.name).alias('sample'))
+        pos = pos.with_columns(pl.lit(sample.name).alias('sample'))
+        if long_form is None:
+            long_form = lf
+            all_pos = pos
+        else:
+            long_form = pl.concat([long_form, lf])
+            all_pos = pl.concat([all_pos, pos])
+
+    # Process permutation
+    long_form = long_form.with_columns(pl.col("gene").shuffle(seed=seed).alias("gene"))
+    allperms = None
+    for sample in sampledir.iterdir():
+        if not sample.is_dir():
+            continue
+        perm = evaluate_permutation(long_form.filter(pl.col("sample").eq(sample.name)),
+                                    all_pos.filter(pl.col("sample").eq(sample.name)),
+                                    seed=seed)
+        perm = perm.with_columns(pl.lit(sample.name).alias('sample'))
+        if allperms is None:
+            allperms = perm
+        else:
+            allperms = pl.concat([allperms, perm])
+
+    # Save to scratch
+    allperms.write_parquet(f'/scratch.global/will4379/allperms_{seed}.parquet')
+
+ 
+
 def evaluate_permutation(long_form, positions, newcolname="MaxMin", seed=None):
     """
     uses long_form to create a new permutation instance, finds the barcodes
