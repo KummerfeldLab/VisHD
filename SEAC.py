@@ -1,8 +1,9 @@
 import warnings
 
+import numpy as np
 import polars as pl
 import scanpy as sc
-from VisHD import blade
+from scipy.spatial import cKDTree
 
 SEAC260314 = {
     "SASP": ["IL1B", "IL6", "CXCL12", "CCL2", "CXCL8", "TGFB1", "VEGFA"],
@@ -78,29 +79,68 @@ def read_sample(sampledir):  # set_barcode_as_index=False):
     return adata, pos
 
 
-def make_bladed_maxMin_positionsFiles(p, outdir, show_progress=True):
-    """given path p, read in counts and positions and save a
-    modified positions table to a dir"""
+def make_bladed_maxMin_positionsFiles(p, outdir):
+    """read original positions file  and anndata from path p,
+    indicate rows flagged by BLADE,
+    and calculate SEAC distances,
+    and save modified positions file to  outdir"""
+
+    # Read in Data
     print(p.name)
     subdir = "outs/binned_outputs/square_002um"
     adata, pos = read_sample(p / subdir)
-    r = blade.blade(pos)
-    excluded_bc = (
-        r.filter(pl.col("blade") == 1).select(pl.col("barcode")).to_series().to_list()
+
+    # Add a `blade` column to the positions dataframe
+    all_coords = pos.select("array_row", "array_col").to_numpy()
+    tree = cKDTree(all_coords)
+    pos = pos.with_columns(pl.lit(0).alias("blade"))
+    blade_start_barcodes = pos.filter(
+        (pl.col("array_row").eq(pl.col("array_row").min()))
+        | (pl.col("array_row").eq(pl.col("array_row").max()))
+        | (pl.col("array_col").eq(pl.col("array_col").min()))
+        | (pl.col("array_col").eq(pl.col("array_col").max()))
+        | (pl.col("in_tissue").eq(0))
+    )["barcode"]
+    blade_coords = (
+        pos.filter(pl.col("barcode").is_in(blade_start_barcodes.implode()))
+        .select("pxl_row_in_fullres", "pxl_col_in_fullres")
+        .to_numpy()
+    )
+    query_output = tree.query_ball_point(blade_coords, r=1, workers=-1)
+    blade_idxs = set()
+    for spot_neighbors in query_output:
+        blade_idxs.update(spot_neighbors)
+    blade_barcodes = pos["barcode"].to_numpy()[list(blade_idxs)]
+    pos.with_columns(
+        pl.when(pl.col("barcode").is_in(blade_barcodes))
+        .then(1)
+        .otherwise(0)
+        .alias("blade")
     )
 
-    for k, v in SEAC.items():
-        print("\t", k)
-        goodgenes = [g for g in v if g in adata.var_names]
+    # Evaluate SEAC MaxMin Distance
+    for category, genes in SEAC.items():
+        # Ensure SEAC genes appear in adata
+        print("\t", category)
+        goodgenes = [g for g in genes if g in adata.var_names]
         print("\tGood:", goodgenes)
-        badgenes = [g for g in v if g not in adata.var_names]
+        badgenes = [g for g in genes if g not in adata.var_names]
         print("\tBad:", badgenes)
         subtable = adata[:, goodgenes]
         bc = subtable[subtable.X.sum(axis=1) > 0].obs.index.to_list()
-#       bc = [x for x in bc if x not in excluded_bc]
-        bc = list(set(bc).difference(excluded_bc))
+        bc = list(set(bc).difference(blade_barcodes))
         if len(bc) == 0:
             continue
-        r = blade.get_neighbors(r, col=k, barcodes=bc, show_progress=show_progress)
-    r = r.with_columns(pl.max_horizontal(SEAC.keys()).alias("MaxMin"))
-    r.write_parquet(outdir / f"{p.name}_bladed.parquet")
+
+        # Build KDTree and evaluate Min distance for the seac category
+        category_coords = (
+            pos.filter(pl.col("barcode").is_in(blade_barcodes).not_())
+            .select("array_row", "array_col")
+            .to_numpy()
+        )
+        tree = cKDTree(category_coords)
+        min_distances, _ = tree.query(all_coords)
+        pos = pos.with_columns(pl.lit(np.ceil(min_distances)).alias(category))
+
+    pos = pos.with_columns(pl.max_horizontal(SEAC.keys()).alias("MaxMin"))
+    pos.write_parquet(outdir / f"{p.name}_bladed.parquet")
