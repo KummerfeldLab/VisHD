@@ -3,7 +3,7 @@ import warnings
 import numpy as np
 import polars as pl
 import scanpy as sc
-from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
 
 SEAC260314 = {
     "SASP": ["IL1B", "IL6", "CXCL12", "CCL2", "CXCL8", "TGFB1", "VEGFA"],
@@ -91,8 +91,9 @@ def make_bladed_maxMin_positionsFiles(p, outdir):
     adata, pos = read_sample(p / subdir)
 
     # Add a `blade` column to the positions dataframe
+    # And identify blade target spots
     all_coords = pos.select("array_row", "array_col").to_numpy()
-    tree = cKDTree(all_coords)
+    tree = KDTree(all_coords)
     pos = pos.with_columns(pl.lit(0).alias("blade"))
     blade_start_barcodes = pos.filter(
         (pl.col("array_row").eq(pl.col("array_row").min()))
@@ -122,25 +123,27 @@ def make_bladed_maxMin_positionsFiles(p, outdir):
     for category, genes in SEAC.items():
         # Ensure SEAC genes appear in adata
         print("\t", category)
-        goodgenes = [g for g in genes if g in adata.var_names]
-        print("\tGood:", goodgenes)
-        badgenes = [g for g in genes if g not in adata.var_names]
-        print("\tBad:", badgenes)
-        subtable = adata[:, goodgenes]
+#       goodgenes = [g for g in genes if g in adata.var_names]
+#       print("\tGood:", goodgenes)
+#       badgenes = [g for g in genes if g not in adata.var_names]
+#       print("\tBad:", badgenes)
+#       subtable = adata[:, goodgenes]
+        subtable = adata[:, genes]
         bc = subtable[subtable.X.sum(axis=1) > 0].obs.index.to_list()
-        bc = list(set(bc).difference(blade_barcodes))
         if len(bc) == 0:
+            print(category, 'has no spots')
             continue
 
         # Build KDTree and evaluate Min distance for the seac category
-        category_coords = (
-            pos.filter(pl.col("barcode").is_in(blade_barcodes).not_())
-            .select("array_row", "array_col")
-            .to_numpy()
-        )
-        tree = cKDTree(category_coords)
+        category_coords = pos.filter(pl.col("blade").eq(0),
+                                     pl.col("barcode").is_in(bc)
+                                    ).select("array_row", "array_col").to_numpy()
+        tree = KDTree(category_coords)
         min_distances, _ = tree.query(all_coords)
         pos = pos.with_columns(pl.lit(np.ceil(min_distances)).alias(category))
 
-    pos = pos.with_columns(pl.max_horizontal(SEAC.keys()).alias("MaxMin"))
+
+    maxmin = pos.select(pl.col(SEAC.SEAC.keys())).max_horizontal()
+    pos = pos.with_columns(pl.lit(maxmin).alias('MaxMin'))
+#   pos = pos.with_columns(pl.max_horizontal(SEAC.keys()).alias("MaxMin"))
     pos.write_parquet(outdir / f"{p.name}_bladed.parquet")
