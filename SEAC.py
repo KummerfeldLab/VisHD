@@ -83,7 +83,13 @@ def make_bladed_maxMin_positionsFiles(p, outdir):
     """read original positions file  and anndata from path p,
     indicate rows flagged by BLADE,
     and calculate SEAC distances,
-    and save modified positions file to  outdir"""
+    and save modified positions file to  outdir
+
+    parameters:
+    ----------
+        p: a Path() to a spaceranger outputs directory
+        outdir: a Path() to where to save the positions file
+    """
 
     # Read in Data
     print(p.name)
@@ -143,7 +149,7 @@ def make_bladed_maxMin_positionsFiles(p, outdir):
         pos = pos.with_columns(pl.lit(np.ceil(min_distances)).alias(category))
 
 
-    maxmin = pos.select(pl.col(SEAC.SEAC.keys())).max_horizontal()
+    maxmin = pos.select(pl.col(SEAC.keys())).max_horizontal()
     pos = pos.with_columns(pl.lit(maxmin).alias('MaxMin'))
 #   pos = pos.with_columns(pl.max_horizontal(SEAC.keys()).alias("MaxMin"))
     pos.write_parquet(outdir / f"{p.name}_bladed.parquet")
