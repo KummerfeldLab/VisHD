@@ -1,8 +1,10 @@
 import multiprocessing as mp
 
+import numpy as np
 import polars as pl
 import scipy
 from VisHD import SEAC, blade, local
+from scipy.spatial import cKDTree
 
 
 def read_basedata(sampledir):
@@ -34,38 +36,50 @@ def permute_all_samples(sampledir, seed=None):
     for sample in sampledir.iterdir():
         if not sample.is_dir():
             continue
+        print("Reading Sample {sample.name}")
         adata, pos = read_basedata(sample)
         lf = adata2longform(adata, pos)
         lf = lf.with_columns(pl.lit(sample.name).alias('sample'))
         pos = pos.with_columns(pl.lit(sample.name).alias('sample'))
+        print("Concatenating longform, positions")
         if long_form is None:
             long_form = lf
             all_pos = pos
         else:
             long_form = pl.concat([long_form, lf])
             all_pos = pl.concat([all_pos, pos])
+        del adata, pos
+    return
 
     # Process permutation
+    print("Permuting Long Form")
     long_form = long_form.with_columns(pl.col("gene").shuffle(seed=seed).alias("gene"))
-    allperms = None
+#   allperms = None
     for sample in sampledir.iterdir():
         if not sample.is_dir():
             continue
+        print("Evaluating Permutation of {sample}")
         perm = evaluate_permutation(long_form.filter(pl.col("sample").eq(sample.name)),
                                     all_pos.filter(pl.col("sample").eq(sample.name)),
-                                    seed=seed)
-        perm = perm.with_columns(pl.lit(sample.name).alias('sample'))
-        if allperms is None:
-            allperms = perm
-        else:
-            allperms = pl.concat([allperms, perm])
+                                    seed=seed,
+                                    shuffle=False)
+#       perm = perm.with_columns(pl.lit(sample.name).alias('sample'))
+#       if allperms is None:
+#           allperms = perm
+#       else:
+#           allperms = pl.concat([allperms, perm])
 
-    # Save to scratch
-    allperms.write_parquet(f'/scratch.global/will4379/allperms_{seed}.parquet')
+        # Save to scratch
+        print("Writing File")
+        perm.write_parquet(f'/scratch.global/will4379/{sample}/perms_{seed}.parquet')
 
  
 
-def evaluate_permutation(long_form, positions, newcolname="MaxMin", seed=None):
+def evaluate_permutation(long_form,
+                         positions,
+                         newcolname="MaxMin",
+                         seed=None,
+                         shuffle=True):
     """
     uses long_form to create a new permutation instance, finds the barcodes
     where the permuted genes of each category occur, and evalutes the neighbor
@@ -73,12 +87,22 @@ def evaluate_permutation(long_form, positions, newcolname="MaxMin", seed=None):
 
     returns a new polars dataframe with columns [`barcode`, `MaxMin`]
     """
-    long_form = long_form.with_columns(pl.col("gene").shuffle(seed=seed).alias("gene"))
+    if shuffle:
+        long_form = long_form.with_columns(pl.col("gene").shuffle(seed=seed).alias("gene"))
+    all_coords = positions.select("array_row", "array_col").to_numpy()
     for category, genes in SEAC.SEAC.items():
-        start_spots = long_form.filter(pl.col("gene").is_in(genes))["barcode"].unique()
-        positions = blade.get_neighbors(
-            positions, col=category, barcodes=list(start_spots), show_progress=False
+        gene_spots = long_form.filter(pl.col("gene").is_in(genes))["barcode"].unique() 
+
+        # Build KDTree and evaluate Min distance for the seac category
+        category_coords = (
+            positions.filter(pl.col("barcode").is_in(gene_spots))
+            .select("array_row", "array_col")
+            .to_numpy()
         )
+        tree = cKDTree(category_coords)
+        min_distances, _ = tree.query(all_coords)
+        positions = positions.with_columns(pl.lit(np.ceil(min_distances)).alias(category))
+
     positions = positions.with_columns(
         pl.max_horizontal(SEAC.SEAC.keys()).alias(newcolname)
     )
