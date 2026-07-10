@@ -78,6 +78,8 @@ def read_sample(sampledir):  # set_barcode_as_index=False):
     pos = read_positions(sampledir)
     return adata, pos
 
+def add_blade_column():
+    pass
 
 def make_bladed_maxMin_positionsFiles(p, outdir):
     """read original positions file  and anndata from path p,
@@ -117,12 +119,10 @@ def make_bladed_maxMin_positionsFiles(p, outdir):
     blade_idxs = set()
     for spot_neighbors in query_output:
         blade_idxs.update(spot_neighbors)
-    blade_barcodes = pos["barcode"].to_numpy()[list(blade_idxs)]
     pos.with_columns(
-        pl.when(pl.col("barcode").is_in(blade_barcodes))
-        .then(1)
-        .otherwise(0)
-        .alias("blade")
+        blade = pl.when(pl.int_range(pl.len()).is_in(blade_idxs))
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0))
     )
 
     # Evaluate SEAC MaxMin Distance
