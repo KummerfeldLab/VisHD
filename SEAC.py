@@ -78,8 +78,31 @@ def read_sample(sampledir):  # set_barcode_as_index=False):
     pos = read_positions(sampledir)
     return adata, pos
 
-def add_blade_column():
-    pass
+def add_blade_column(pos):
+    """ Modifies and returns a visiumHD positions file with
+    and additional `blade` column """
+
+    all_coords = pos.select("array_row", "array_col").to_numpy()
+
+    blade_start_coords = pos.filter(
+        pl.col('array_row').eq(pos['array_row'].max())
+        | pl.col('array_col').eq(pos['array_col'].max())
+        | pl.col('array_row').eq(pos['array_row'].min())
+        | pl.col('array_col').eq(pos['array_col'].min())
+        | pl.col('in_tissue').eq(0)
+    ).select("array_row", "array_col").to_numpy()
+
+    tree = KDTree(blade_start_coords)
+    query_result = tree.query_ball_tree(scipy.spatial.KDTree(all_coords), r=1)
+    blade_idxs = set()
+    for spot_neighbors in query_output:
+        blade_idxs.update(spot_neighbors)
+    pos = pos.with_columns(
+        blade = pl.when(pl.int_range(pl.len()).is_in(blade_idxs))
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0))
+    )
+    return pos
 
 def make_bladed_maxMin_positionsFiles(p, outdir):
     """read original positions file  and anndata from path p,
@@ -102,24 +125,19 @@ def make_bladed_maxMin_positionsFiles(p, outdir):
     # And identify blade target spots
     all_coords = pos.select("array_row", "array_col").to_numpy()
     tree = KDTree(all_coords)
-    pos = pos.with_columns(pl.lit(0).alias("blade"))
-    blade_start_barcodes = pos.filter(
+    blade_start_coords = pos.filter(
         (pl.col("array_row").eq(pl.col("array_row").min()))
         | (pl.col("array_row").eq(pl.col("array_row").max()))
         | (pl.col("array_col").eq(pl.col("array_col").min()))
         | (pl.col("array_col").eq(pl.col("array_col").max()))
         | (pl.col("in_tissue").eq(0))
-    )["barcode"]
-    blade_coords = (
-        pos.filter(pl.col("barcode").is_in(blade_start_barcodes.implode()))
-        .select("pxl_row_in_fullres", "pxl_col_in_fullres")
-        .to_numpy()
-    )
-    query_output = tree.query_ball_point(blade_coords, r=1, workers=-1)
+    ).select("pxl_row_in_fullres", "pxl_col_in_fullres").to_numpy()
+
+    query_output = tree.query_ball_point(blade_start_coords, r=1, workers=-1)
     blade_idxs = set()
     for spot_neighbors in query_output:
         blade_idxs.update(spot_neighbors)
-    pos.with_columns(
+    pos = pos.with_columns(
         blade = pl.when(pl.int_range(pl.len()).is_in(blade_idxs))
         .then(pl.lit(1))
         .otherwise(pl.lit(0))
