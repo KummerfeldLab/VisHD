@@ -93,9 +93,9 @@ def add_blade_column(pos):
     ).select("array_row", "array_col").to_numpy()
 
     tree = KDTree(blade_start_coords)
-    query_result = tree.query_ball_tree(scipy.spatial.KDTree(all_coords), r=1)
+    query_result = tree.query_ball_tree(KDTree(all_coords), r=1)
     blade_idxs = set()
-    for spot_neighbors in query_output:
+    for spot_neighbors in query_result:
         blade_idxs.update(spot_neighbors)
     pos = pos.with_columns(
         blade = pl.when(pl.int_range(pl.len()).is_in(blade_idxs))
@@ -123,25 +123,8 @@ def make_bladed_maxMin_positionsFiles(p, outdir):
 
     # Add a `blade` column to the positions dataframe
     # And identify blade target spots
-    all_coords = pos.select("array_row", "array_col").to_numpy()
-    tree = KDTree(all_coords)
-    blade_start_coords = pos.filter(
-        (pl.col("array_row").eq(pl.col("array_row").min()))
-        | (pl.col("array_row").eq(pl.col("array_row").max()))
-        | (pl.col("array_col").eq(pl.col("array_col").min()))
-        | (pl.col("array_col").eq(pl.col("array_col").max()))
-        | (pl.col("in_tissue").eq(0))
-    ).select("pxl_row_in_fullres", "pxl_col_in_fullres").to_numpy()
+    bladed = add_blade_column()
 
-    query_output = tree.query_ball_point(blade_start_coords, r=1, workers=-1)
-    blade_idxs = set()
-    for spot_neighbors in query_output:
-        blade_idxs.update(spot_neighbors)
-    pos = pos.with_columns(
-        blade = pl.when(pl.int_range(pl.len()).is_in(blade_idxs))
-        .then(pl.lit(1))
-        .otherwise(pl.lit(0))
-    )
 
     # Evaluate SEAC MaxMin Distance
     for category, genes in SEAC.items():
@@ -159,15 +142,15 @@ def make_bladed_maxMin_positionsFiles(p, outdir):
             continue
 
         # Build KDTree and evaluate Min distance for the seac category
-        category_coords = pos.filter(pl.col("blade").eq(0),
+        category_coords = bladed.filter(pl.col("blade").eq(0),
                                      pl.col("barcode").is_in(bc)
                                     ).select("array_row", "array_col").to_numpy()
         tree = KDTree(category_coords)
         min_distances, _ = tree.query(all_coords)
-        pos = pos.with_columns(pl.lit(np.ceil(min_distances)).alias(category))
+        bladed = bladed.with_columns(pl.lit(np.ceil(min_distances)).alias(category))
 
 
-    maxmin = pos.select(pl.col(SEAC.keys())).max_horizontal()
-    pos = pos.with_columns(pl.lit(maxmin).alias('MaxMin'))
+    maxmin = bladed.select(pl.col(SEAC.keys())).max_horizontal()
+    pos = bladed.with_columns(pl.lit(maxmin).alias('MaxMin'))
 #   pos = pos.with_columns(pl.max_horizontal(SEAC.keys()).alias("MaxMin"))
-    pos.write_parquet(outdir / f"{p.name}_bladed.parquet")
+    bladed.write_parquet(outdir / f"{p.name}_bladed.parquet")
