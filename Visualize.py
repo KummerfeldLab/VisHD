@@ -16,6 +16,15 @@ LIGHTBLUE = (173, 216, 230)
 BLUE = (65, 105, 255)
 RED = (255, 20, 147)
 
+# BGR Colors for OpenCV
+COLORS = {
+    "magenta": (209, 0, 181),  # Your original color
+    "lime_green": (0, 255, 0),  # High visual pop
+    "cyan": (255, 255, 0),  # Crisp contrast on grayscale
+    "orange": (0, 128, 255),  # Distinct warm tone
+    "yellow": (0, 230, 255),  # Maximum brightness
+}
+
 colors = {
     'SASP': (00, 209, 28),
     'EMC': (0, 77, 209),
