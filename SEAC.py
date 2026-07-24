@@ -123,10 +123,11 @@ def make_bladed_maxMin_positionsFiles(p, outdir):
 
     # Add a `blade` column to the positions dataframe
     # And identify blade target spots
-    bladed = add_blade_column()
+    bladed = add_blade_column(pos)
 
 
     # Evaluate SEAC MaxMin Distance
+    all_coords = pos.select("array_row", "array_col").to_numpy()
     for category, genes in SEAC.items():
         # Ensure SEAC genes appear in adata
         print("\t", category)
@@ -151,6 +152,6 @@ def make_bladed_maxMin_positionsFiles(p, outdir):
 
 
     maxmin = bladed.select(pl.col(SEAC.keys())).max_horizontal()
-    pos = bladed.with_columns(pl.lit(maxmin).alias('MaxMin'))
+    bladed = bladed.with_columns(pl.lit(maxmin).alias('MaxMin'))
 #   pos = pos.with_columns(pl.max_horizontal(SEAC.keys()).alias("MaxMin"))
     bladed.write_parquet(outdir / f"{p.name}_bladed.parquet")
