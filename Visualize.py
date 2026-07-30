@@ -1,15 +1,15 @@
 import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,41).__str__()
+import json
 from VisHD.SEAC import SEAC
 from VisHD import local
 import polars as pl
 import matplotlib.pyplot as plt
 from pathlib import Path
 import cv2 as cv
-import VisHD.Visualize as viz
+#import VisHD.Visualize as viz
 #from sklearn.cluster import KMeans
 
-# overlay = np.zeros_like(gs_img, np.uint8)
 ROWDIFF = 5
 COLDIFF = 5
 LIGHTBLUE = (173, 216, 230)
@@ -18,18 +18,18 @@ RED = (255, 20, 147)
 
 # BGR Colors for OpenCV
 COLORS = {
-    "magenta": (209, 0, 181),  # Your original color
-    "lime_green": (0, 255, 0),  # High visual pop
-    "cyan": (255, 255, 0),  # Crisp contrast on grayscale
-    "orange": (0, 128, 255),  # Distinct warm tone
-    "yellow": (0, 230, 255),  # Maximum brightness
+    "hotspots": (209, 0, 181),  # Original magenta color
+    "SASP": (0, 255, 0),  # LimeGreen for high visual pop
+    "EMC": (255, 255, 0),  # Cyan gives crisp contrast on grayscale
+    "Anti_Apoptotic": (0, 128, 255),  # Orange for a warm tone
+    "Cell_Cycle_Related": (0, 230, 255),  # Yellow for maximum brightness
 }
 
-colors = {
-    'SASP': (00, 209, 28),
-    'EMC': (0, 77, 209),
-    'Anti_Apoptotic': (209, 0, 181),
-    'Cell_Cycle_Related': (209, 132, 0)}
+#colors = {
+#    'SASP': (00, 209, 28),
+#    'EMC': (0, 77, 209),
+#    'Anti_Apoptotic': (209, 0, 181),
+#    'Cell_Cycle_Related': (209, 132, 0)}
 
 
 def make_seac_image(ann, pos, img):
@@ -96,13 +96,75 @@ def make_annotated_image(samplename, positions):
         break
     tif = cv.cvtColor(cv.cvtColor(cv.imread(tif_f), cv.COLOR_BGR2GRAY), cv.COLOR_GRAY2RGB)
     overlay = tif.copy()
-    viz.draw_spots(overlay, positions, (209, 0, 181), 40)
+    viz.draw_spots(overlay, positions, COLORS['magenta'], sidelength=5)
+
+    # Determine coordinates for cropping
     xmin = int(positions.select(pl.col('pxl_row_in_fullres').min()).item())
     ymin = int(positions.select(pl.col('pxl_col_in_fullres').min()).item())
     xmax = int(positions.select(pl.col('pxl_row_in_fullres').max()).item())
     ymax = int(positions.select(pl.col('pxl_col_in_fullres').max()).item())
+
+    # Join images
     final = cv.addWeighted(tif, .6, overlay, 0.4, 0)
+
+    # Crop
     final = final[ymin-50 : ymax+50, xmin - 50 : xmax + 50]
 
     del tif, overlay
     return final
+
+
+def make_multi_annotated_image(samplename, positions, barcodes, colors=COLORS, outdir=Path(), title="", sqr_pxls=5, cir_radius=20, cir_thickness=2):
+    """ returns an annotated image
+
+    parameters:
+    ----------
+        samplename: the name of a sample.
+        barcodes: a dictionary of where values are sets of barcodes to highlight
+            on the image overlay
+        colors: a dictionary of color values with the keys a subset of the keys in barcodes
+    """
+    
+    # Read Positions file
+
+    # Read in Tiff Image
+    tif_ext = 'outs/spatial'
+    tif_d = local.spaceranger_outputs_dir / samplename / tif_ext
+    # The filename of the tif is not consistant, so we search for the first tif in the directory
+    for tif_f in (tif_d).iterdir():
+        if 'tif' != tif_f.name[-3:]:
+            continue
+        break
+
+    # Greyscale the original image
+    tif = cv.cvtColor(cv.cvtColor(cv.imread(tif_f), cv.COLOR_BGR2GRAY), cv.COLOR_GRAY2RGB)
+
+    # Create the overlay with the annotations
+    overlay = tif.copy()
+    for cat, bc in barcodes.items():
+        filtered = positions.filter(pl.col('barcode').is_in(bc))
+        if cat == 'hotspots':
+            draw_spots(overlay, positions, colors[cat], sidelength=sqr_pxls)
+        else:
+            for x,y in filtered.select("pxl_col_in_fullres", "pxl_row_in_fullres").iter_rows():
+                cv.circle(overlay, center=(int(x),int(y)), radius=cir_radius, color=colors[cat], thickness=cir_thickness)
+
+
+    # Determine coordinates for cropping
+    xmin = int(positions.select(pl.col('pxl_row_in_fullres').min()).item())
+    ymin = int(positions.select(pl.col('pxl_col_in_fullres').min()).item())
+    xmax = int(positions.select(pl.col('pxl_row_in_fullres').max()).item())
+    ymax = int(positions.select(pl.col('pxl_col_in_fullres').max()).item())
+
+    # Join images
+    final = cv.addWeighted(tif, .6, overlay, 0.4, 0)
+
+    # Crop
+    final = final[ymin-50 : ymax+50, xmin - 50 : xmax + 50]
+    final = cv.copyMakeBorder(final, 340, 0, 0, 0, cv.BORDER_CONSTANT, value=(255, 255, 255))
+    final = cv.putText(final, samplename + ' 1% Permutation Hotspots', (40, 280),
+               cv.FONT_HERSHEY_TRIPLEX, 10, (0,0,0), 4)
+
+    # Save
+    cv.imwrite(outdir / f"{samplename}.png", final)
+    del tif, overlay, final
