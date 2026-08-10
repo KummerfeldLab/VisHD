@@ -7,7 +7,6 @@ import polars as pl
 import matplotlib.pyplot as plt
 from pathlib import Path
 import cv2 as cv
-#import VisHD.Visualize as viz
 #from sklearn.cluster import KMeans
 
 ROWDIFF = 5
@@ -114,7 +113,7 @@ def make_annotated_image(samplename, positions):
     return final
 
 
-def make_multi_annotated_image(samplename, positions, barcodes, colors=COLORS, outdir=Path(), title="", sqr_pxls=5, cir_radius=20, cir_thickness=2):
+def make_multi_annotated_image(samplename, positions, barcodes, colors=COLORS, outdir=Path(), title="", sqr_pxls=5, cir_radius=10, cir_thickness=1):
     """ returns an annotated image
 
     parameters:
@@ -143,8 +142,9 @@ def make_multi_annotated_image(samplename, positions, barcodes, colors=COLORS, o
     overlay = tif.copy()
     for cat, bc in barcodes.items():
         filtered = positions.filter(pl.col('barcode').is_in(bc))
+        print(cat, colors[cat], end=' ')
         if cat == 'hotspots':
-            draw_spots(overlay, positions, colors[cat], sidelength=sqr_pxls)
+            draw_spots(overlay, filtered, colors[cat], sidelength=sqr_pxls)
         else:
             for x,y in filtered.select("pxl_col_in_fullres", "pxl_row_in_fullres").iter_rows():
                 cv.circle(overlay, center=(int(x),int(y)), radius=cir_radius, color=colors[cat], thickness=cir_thickness)
