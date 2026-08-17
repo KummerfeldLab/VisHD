@@ -1,13 +1,16 @@
 import getpass
 import submitit
 import datetime
+from zoneinfo import ZoneInfo
+import time
 from pathlib import Path
 from VisHD import local, PermuteAllSamples, SEAC
+import VisHD.Visualize as viz
 import scipy
 import gc
 import polars as pl
 import numpy as np
-from zoneinfo import ZoneInfo
+from scipy.spatial import KDTree
 
 
 samples = [
@@ -24,6 +27,8 @@ GENE_DICT = SEAC.SEAC
 PERMS_PER_RUN = 100
 POSITIONS_DIR = local.bladed_d
 
+def timestamp():
+    return time.strftime('(%H:%M:%S)')
 
 def permute_sample(samplename, runnum, topdir, count_table):
     """Provides MaxMin evaluations of permutations for one sample of the genes of all samples"""
@@ -36,7 +41,7 @@ def permute_sample(samplename, runnum, topdir, count_table):
     outdir.mkdir(exist_ok=True)
 
     # Read samples longform barcodes
-    lf_path = topdir / f"longforms/{samplename}.parquet"
+    lf_path = topdir / f"longform/{samplename}.parquet"
     longform = pl.read_parquet(lf_path)
 
     # Explode all the gene categories
@@ -77,14 +82,16 @@ def permute_sample(samplename, runnum, topdir, count_table):
 def make_gene_count_table(samples, longformdir, gene_dict=GENE_DICT):
     """Reads each sample in `samples`, and returns a sample counting the number
     of genes in the values of each key of gene_dict as well as the number of non-category genes.
-    Also outputs the longform barcodes to the longform directory """
-    table = None
+    Also outputs the longform barcodes to the longform directory"""
+    table = pl.DataFrame()
     for sample in samples:
+        print('\t{timestamp()} {sample}: Reading Data')
         sampledir = local.spaceranger_outputs_dir / sample
         adata = SEAC.read_h5(sampledir / "outs/binned_outputs/square_002um")
         pos = pl.read_parquet(local.bladed_d / f"{sampledir.name}_bladed.parquet")
 
         # Create a long form table
+        print('\t{timestamp()} {sample}: Reformatting')
         row, col, count = scipy.sparse.find(adata.X)
         df = pl.DataFrame(
             {
@@ -98,7 +105,7 @@ def make_gene_count_table(samples, longformdir, gene_dict=GENE_DICT):
         long_form = df.select(pl.exclude("nreads").repeat_by("nreads").explode())
 
         # Save long form barcodes
-        long_form.select('barcode').write_parquet(longformdir / f"{sample}.parquet")
+        long_form.select("barcode").write_parquet(longformdir / f"{sample}.parquet")
 
         # Build a dynamic when expression
         when_expr = pl.coalesce(
@@ -110,20 +117,23 @@ def make_gene_count_table(samples, longformdir, gene_dict=GENE_DICT):
             when_expr.fill_null(pl.lit("Other")).alias("category")
         )["category"].value_counts()
         category_counts = category_counts.select(
-            "category", pl.col("count").alias(sample.name)
+            "category", pl.col("count").alias(sample)
         )
 
-        if table is None:
+        if len(table) == 0:
             table = category_counts
         else:
             table = table.join(category_counts, on="category")
 
+    table = table.with_columns(table.sum_horizontal().alias('Total'))
+
     return table
 
 
-def collate(samplename, permutations, outdir):
+def collate(samplename, topdir, outdir):
     df = pl.DataFrame()
-    for nfiles, f in enumerate(permutations.iterdir(), start=1):
+    permutation_dir = topdir / samplename
+    for nfiles, f in enumerate(permutation_dir.iterdir(), start=1):
         gc.collect()
         if nfiles == 1:
             df = pl.read_parquet(f)
@@ -143,17 +153,54 @@ def collate(samplename, permutations, outdir):
     df.write_parquet(outdir / f"{samplename}.parquet")
 
 
+# for k in list(local.bladed_d.iterdir()):
+def make_annotated_image(samplename, gene_list, collated_dir, img_outdir):
+    gc.collect()
+    positions_filename = local.bladed_d / f"{samplename}_bladed.parquet"
+    print(positions_filename, "Reading", end=" ")
+    pos = pl.read_parquet(positions_filename)
+    tpos = pos.filter(pl.col("MaxMin").le(100), pl.col("blade").eq(0))
+    collated_permutations = pl.read_parquet(collated_dir / f"{samplename}.parquet")
+
+    print("Calculating ROIs:", end=" ")
+    # find spots whose MaxMin is below the max permutation
+    # and extract their barcodes and coordinates
+    bcs = {}
+    collated_permutations = collated_permutations.with_columns(
+        pl.col("low").list.max().alias("threshold")
+    )
+    joined = collated_permutations.join(tpos, on="barcode")
+    hotspots_pos = joined.filter(pl.col("MaxMin").le(pl.col("threshold")))
+    bcs["hotspots"] = hotspots_pos["barcode"].to_list()
+    hotspot_coords = hotspots_pos.select("array_row", "array_col").to_numpy()
+
+    # Find closest category read for each hotspot
+    for category in gene_list:
+        print(category, end=" ")
+        category_pos = tpos.filter(pl.col(category).eq(0))
+        category_coords = category_pos.select("array_row", "array_col").to_numpy()
+        tree = KDTree(category_coords)
+        _, idxs = tree.query(hotspot_coords, workers=-1)
+        bcs[category] = category_pos[np.unique(idxs)]["barcode"].to_list()
+
+    print("\nImaging", end=" ")
+    viz.make_multi_annotated_image(
+        samplename, tpos, bcs, colors=viz.COLORS, outdir=img_outdir
+    )
+    print("Done", end="\n\n")
+
+
 if __name__ == "__main__":
     username = getpass.getuser()
     chitime = datetime.datetime.now(tz=ZoneInfo("America/Chicago"))
     datestamp = chitime.strftime("%Y%m%d")
-    print(username, datestamp)
 
     # Create Permuation Output Directories
-    userroot = Path("/sbatch.global") / username
+    print(timestamp(), 'creating directories')
+    userroot = Path("/scratch.global") / username
     userroot.mkdir(exist_ok=True)
 
-    projectroot = Path("/sbatch.global") / username
+    projectroot = userroot / f"permutation_{datestamp}"
     projectroot.mkdir(exist_ok=True)
 
     collated_dir = projectroot / "collated"
@@ -171,19 +218,52 @@ if __name__ == "__main__":
     for sample in samples:
         (projectroot / sample).mkdir(exist_ok=True)
 
-    # Make Gene Category table
-    count_table = make_gene_count_table(samples, longformdir, GENE_DICT)
-
-    # Do the Permutations
+    # Instantiate Job executor
     executor = submitit.AutoExecutor(folder=log_dir)
+
+    # Make Gene Category table
+    print(timestamp(), 'building count table')
     executor.update_parameters(
-        timeout_min=360,
-        mem_gb=64,
         slurm_account="lniedern",
+        mem_gb=64,
+        timeout_min=60,
         cpus_per_task=2,
+        name="Make_Count_Table")
+    job = executor.submit(make_gene_count_table, samples, longformdir, GENE_DICT)
+    count_table = job.result()
+    print(timestamp(), 'count table finished')
+
+    # Make Permutations for Each Sample
+    print(timestamp(), 'Permuting Samples')
+    executor.update_parameters(
         name="VisHDPermute",
     )
+    jobs = executor.map_array(
+        permute_sample, samples, range(50), [projectroot], [count_table]
+    )
+    _ = [job.result() for job in jobs]
+    print(timestamp(), 'Permuting Finished')
 
     # Collate
+    print(timestamp(), 'Collating Permutations')
+    executor.update_parameters(name="CollatePermutations")
+    #jobs = executor.map_array(collate, samples, [projectroot], [collated_dir])
+    jobs = []
+    with executor.batch():
+        for samplename in samples:
+            job = executor.submit(collate, samplename, projectroot, collated_dir)
+            jobs.append(job)
+    _ = [job.result() for job in jobs]
+    print(timestamp(), 'Collating Finished')
 
     # Generate Image Files
+    print(timestamp(), 'Generating Images')
+    executor.update_parameters(name="GenerateImages")
+    jobs = []
+    with executor.batch():
+        for samplename in samples:
+            job = executor.submit(make_annotated_image, samplename, collated_dir, image_dir)
+            jobs.append(job)
+    _ = [job.result() for job in jobs]
+    print(timestamp(), 'Finished')
+
