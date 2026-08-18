@@ -125,7 +125,8 @@ def make_gene_count_table(samples, longformdir, gene_dict=GENE_DICT):
         else:
             table = table.join(category_counts, on="category")
 
-    table = table.with_columns(table.sum_horizontal().alias('Total'))
+    table = table.with_columns(table[:, 1:].sum_horizontal().alias('Total'))
+    table.write_parquet(longformdir.parent / 'count_table.parquet')
 
     return table
 
@@ -153,7 +154,6 @@ def collate(samplename, topdir, outdir):
     df.write_parquet(outdir / f"{samplename}.parquet")
 
 
-# for k in list(local.bladed_d.iterdir()):
 def make_annotated_image(samplename, gene_list, collated_dir, img_outdir):
     gc.collect()
     positions_filename = local.bladed_d / f"{samplename}_bladed.parquet"
