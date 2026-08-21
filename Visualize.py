@@ -18,6 +18,7 @@ RED = (255, 20, 147)
 # BGR Colors for OpenCV
 COLORS = {
     "hotspots": (209, 0, 181),  # Original magenta color
+    "hotspots2": (0, 255, 0),
     "SASP": (0, 255, 0),  # LimeGreen for high visual pop
     "EMC": (255, 255, 0),  # Cyan gives crisp contrast on grayscale
     "Anti_Apoptotic": (0, 128, 255),  # Orange for a warm tone
@@ -39,7 +40,7 @@ def make_seac_image(ann, pos, img):
         subtable = ann[:, v]
         barcodes = subtable[subtable.X.sum(axis=1) > 0].obs.index.to_list()
         seac_positions = pos.filter(pl.col('barcode').is_in(barcodes))
-        viz.draw_spots(overlay, seac_positions, colors[k], sidelength=40)
+        draw_spots(overlay, seac_positions, COLORS[k], sidelength=40)
     return overlay
 #   return cv.addWeighted(img, 0.4, overlay, 0.55, 0.05)
 
@@ -143,7 +144,7 @@ def make_multi_annotated_image(samplename, positions, barcodes, colors=COLORS, o
     for cat, bc in barcodes.items():
         filtered = positions.filter(pl.col('barcode').is_in(bc))
         print(cat, colors[cat], end=' ')
-        if cat == 'hotspots':
+        if 'hotspots'in cat:
             draw_spots(overlay, filtered, colors[cat], sidelength=sqr_pxls)
         else:
             for x,y in filtered.select("pxl_col_in_fullres", "pxl_row_in_fullres").iter_rows():
