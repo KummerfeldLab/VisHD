@@ -12,6 +12,8 @@ import polars as pl
 import numpy as np
 from scipy.spatial import KDTree
 from enum import Enum
+import pyarrow
+import pyarrow.parquet as pq
 
 
 samples = [
@@ -24,18 +26,19 @@ samples = [
     "H1-HDMGRMD_A1",
 ]
 
+
 class PHASE(Enum):
     ALL = 0
-    SETUP = 1 
+    SETUP = 1
     MAKE_COUNT_TABLE = 2
     PERMUTE = 3
     COLLATE = 4
     VISUALIZE = 5
 
+
 GENE_DICT = SEAC.SEAC
 PERMS_PER_RUN = 100
 POSITIONS_DIR = local.bladed_d
-
 
 
 def timestamp():
@@ -100,14 +103,14 @@ def make_gene_count_table(samples, longformdir, gene_dict=GENE_DICT):
     of genes in the values of each key of gene_dict as well as the number of non-category genes.
     Also outputs the longform barcodes to the longform directory"""
     table = pl.DataFrame()
-    for sample in samples:
-        print("\t{timestamp()} {sample}: Reading Data")
-        sampledir = local.spaceranger_outputs_dir / sample
+    for samplename in samples:
+        print("\t{timestamp()} {samplename}: Reading Data")
+        sampledir = local.spaceranger_outputs_dir / samplename
         adata = SEAC.read_h5(sampledir / "outs/binned_outputs/square_002um")
         pos = pl.read_parquet(local.bladed_d / f"{sampledir.name}_bladed.parquet")
 
         # Create a long form table
-        print("\t{timestamp()} {sample}: Reformatting")
+        print("\t{timestamp()} {samplename}: Reformatting")
         row, col, count = scipy.sparse.find(adata.X)
         df = pl.DataFrame(
             {
@@ -121,7 +124,7 @@ def make_gene_count_table(samples, longformdir, gene_dict=GENE_DICT):
         long_form = df.select(pl.exclude("nreads").repeat_by("nreads").explode())
 
         # Save long form barcodes
-        long_form.select("barcode").write_parquet(longformdir / f"{sample}.parquet")
+        long_form.select("barcode").write_parquet(longformdir / f"{samplename}.parquet")
 
         # Build a dynamic when expression
         when_expr = pl.coalesce(
@@ -133,7 +136,7 @@ def make_gene_count_table(samples, longformdir, gene_dict=GENE_DICT):
             when_expr.fill_null(pl.lit("Other")).alias("category")
         )["category"].value_counts()
         category_counts = category_counts.select(
-            "category", pl.col("count").alias(sample)
+            "category", pl.col("count").alias(samplename)
         )
 
         if len(table) == 0:
@@ -147,9 +150,13 @@ def make_gene_count_table(samples, longformdir, gene_dict=GENE_DICT):
     return table
 
 
-def collate(samplename, topdir, outdir):
-    df = pl.DataFrame()
+def collate(jobinfo):
+    samplename = jobinfo["samplename"]
+    topdir = jobinfo["projectroot"]
+    outdir = jobinfo["outdir"]
     permutation_dir = topdir / samplename
+
+    df = pl.DataFrame()
     for nfiles, f in enumerate(permutation_dir.iterdir(), start=1):
         gc.collect()
         if nfiles == 1:
@@ -170,6 +177,42 @@ def collate(samplename, topdir, outdir):
     df.write_parquet(outdir / f"{samplename}.parquet")
 
 
+def newcollate(jobinfo):
+    samplename = jobinfo["samplename"]
+    topdir = jobinfo["projectroot"]
+    outdir = jobinfo["outdir"]
+    permutation_dir = topdir / samplename
+
+    barcodes = []
+    chunk = []
+    for nfiles, f in enumerate(permutation_dir.iterdir(), start=1):
+        print(f"{timestamp()} reading {f}", flush=True)
+        table = pq.read_table(f)
+        if nfiles == 1:
+            print(f"{timestamp()} extracting barcodes", flush=True)
+            barcodes = table.column("barcode")
+            barcodes.to_numpy()
+        print(f"{timestamp()} extracting columns", flush=True)
+        array = np.column_stack(
+            [table.column(name).to_numpy() for name in table.column_names[1:]]
+        )
+        del table
+        gc.collect()
+        if nfiles == 1:
+            chunk = array
+        else:
+            chunk = np.hstack([chunk, array])
+        print(f"{timestamp()} selecting lowest 50", flush=True)
+        chunk = np.partition(chunk, 50, axis=1)[:, :50]
+    print(f"{timestamp()} selecting row-wise max", flush=True)
+    thresholds = chunk.max(axis=1)
+    result = pyarrow.Table.from_arrays(
+        [barcodes, thresholds], names=["barcode", "threshold"]
+    )
+    print(f"{timestamp()} writing results", flush=True)
+    pyarrow.parquet.write_table(result, outdir / f"{samplename}.parquet")
+
+
 def lazy_collate(jobinfo):
     samplename = jobinfo["samplename"]
     topdir = jobinfo["projectroot"]
@@ -178,21 +221,18 @@ def lazy_collate(jobinfo):
     print(f"{timestamp()} Collating {samplename}")
     print(f"Source dirctory: {permutation_dir}")
 
-#   lazy_frames = [pl.scan_parquet(f) for f in permutation_dir.iterdir()]
+    #   lazy_frames = [pl.scan_parquet(f) for f in permutation_dir.iterdir()]
     files = list(permutation_dir.iterdir())
     lazy_frames = [pl.scan_parquet(files[0])] + [
         pl.scan_parquet(f).drop("barcode") for f in files[1:]
     ]
     print(f"Found {len(lazy_frames)} files")
 
-#   merged = lazy_frames[0]
-#   for lf in lazy_frames[1:]:
-#       merged = merged.join(lf, on="barcode", how="inner")
+    #   merged = lazy_frames[0]
+    #   for lf in lazy_frames[1:]:
+    #       merged = merged.join(lf, on="barcode", how="inner")
 
-    merged = pl.concat(lazy_frames, how='horizontal')
-
-
-    result = merged.select(
+    merged = pl.concat(lazy_frames, how="horizontal").select(
         pl.col("barcode"),
         pl.concat_list(pl.exclude("barcode"))
         .list.sort()
@@ -202,26 +242,32 @@ def lazy_collate(jobinfo):
     )
 
     print(f"writing {outdir}/{samplename}.parquet")
-    result.sink_parquet(outdir / f"{samplename}.parquet")
+    merged.sink_parquet(outdir / f"{samplename}.parquet")
     print(f"{timestamp()} Finished Collating {samplename}")
 
 
 def make_annotated_image(samplename, gene_list, collated_dir, img_outdir):
-    gc.collect()
     positions_filename = local.bladed_d / f"{samplename}_bladed.parquet"
-    print(positions_filename, "Reading", end=" ")
+    print(f"{timestamp()} Reading positions data from {positions_filename}", flush=True)
     pos = pl.read_parquet(positions_filename)
-    tpos = pos.filter(pl.col("MaxMin").le(100), pl.col("blade").eq(0))
-    collated_permutations = pl.read_parquet(collated_dir / f"{samplename}.parquet")
+    pos = pos.filter(pl.col("MaxMin").le(100), pl.col("blade").eq(0))
+    print(f"{timestamp()} Positions file has columns {pos.columns}", flush=True)
 
-    print("Calculating ROIs:", end=" ")
+    collated_f = collated_dir / f"{samplename}.parquet"
+    print(f"{timestamp()} Reading collated permutations from {collated_f}", flush=True)
+    collated_permutations = pl.read_parquet(collated_f)
+    print(f"{timestamp()} Collated file has columns {collated_permutations.columns}", flush=True)
+
+    print("Calculating ROIs:", flush=True)
     # find spots whose MaxMin is below the max permutation
     # and extract their barcodes and coordinates
     bcs = {}
-    collated_permutations = collated_permutations.with_columns(
-        pl.col("low").list.max().alias("threshold")
-    )
-    joined = collated_permutations.join(tpos, on="barcode")
+#   collated_permutations = collated_permutations.with_columns(
+#       pl.col("low").list.max().alias("threshold")
+#   )
+    print(f"{timestamp()} Joinings positions file with thresholds", flush=True)
+    joined = collated_permutations.join(pos, on="barcode")
+    print(f"{timestamp()} joined dataframe has columns {joined.columns}", flush=True)
     hotspots_pos = joined.filter(pl.col("MaxMin").le(pl.col("threshold")))
     bcs["hotspots"] = hotspots_pos["barcode"].to_list()
     hotspot_coords = hotspots_pos.select("array_row", "array_col").to_numpy()
@@ -229,7 +275,7 @@ def make_annotated_image(samplename, gene_list, collated_dir, img_outdir):
     # Find closest category read for each hotspot
     for category in gene_list:
         print(category, end=" ")
-        category_pos = tpos.filter(pl.col(category).eq(0))
+        category_pos = joined.filter(pl.col(category).eq(0))
         category_coords = category_pos.select("array_row", "array_col").to_numpy()
         tree = KDTree(category_coords)
         _, idxs = tree.query(hotspot_coords, workers=-1)
@@ -237,7 +283,7 @@ def make_annotated_image(samplename, gene_list, collated_dir, img_outdir):
 
     print("\nImaging", end=" ")
     viz.make_multi_annotated_image(
-        samplename, tpos, bcs, colors=viz.COLORS, outdir=img_outdir
+        samplename, joined, bcs, colors=viz.COLORS, outdir=img_outdir
     )
     print("Done", end="\n\n")
 
@@ -252,7 +298,7 @@ if __name__ == "__main__":
     userroot = Path("/scratch.global") / username
     userroot.mkdir(exist_ok=True)
 
-#   projectroot = userroot / f"permutation_{datestamp}"
+    #   projectroot = userroot / f"permutation_{datestamp}"
     projectroot = userroot / "permutation_20260820"
     projectroot.mkdir(exist_ok=True)
 
@@ -273,18 +319,14 @@ if __name__ == "__main__":
 
     # Instantiate Job executor
     executor = submitit.AutoExecutor(folder=log_dir)
-    executor.update_parameters(
-        slurm_account="lniedern",
-        mem_gb=64,
-        slurm_time="30:00"
-        )
+    executor.update_parameters(slurm_account="lniedern", mem_gb=64, slurm_time="30:00")
 
     # Make Gene Category table
     if not (projectroot / "count_table.parquet").exists():
         print(timestamp(), "building count table")
         executor.update_parameters(
             name="Make_Count_Table",
-#           slurm_output="Make_Count_Table.log",
+            #           slurm_output="Make_Count_Table.log",
         )
 
         job = executor.submit(make_gene_count_table, samples, longformdir, GENE_DICT)
@@ -311,19 +353,21 @@ if __name__ == "__main__":
     executor.update_parameters(
         name="VisHDPermute",
         slurm_job_name="VisHDPermute",
-#       slurm_output="permute_%a.out",
+        #       slurm_output="permute_%a.out",
         slurm_time="06:00:00",
         cpus_per_task=4,
     )
-#   jobs = executor.map_array(permute_sample, runs)
-#   _ = [job.wait() for job in jobs]
+    #   jobs = executor.map_array(permute_sample, runs)
+    #   _ = [job.wait() for job in jobs]
     print(timestamp(), "Permuting Finished")
     print("Sanity Check:")
     for samplename in samples:
-        files = [f for f in (projectroot / samplename).iterdir() if '.parquet' in f.name]
+        files = [
+            f for f in (projectroot / samplename).iterdir() if ".parquet" in f.name
+        ]
         print(samplename, len(files))
 
-    # Collate Permutations of Each Sample
+    # Collate Permutations of Each Sample and Determine 1% Threshold
     runs = []
     for sample in samples:
         collate_d = {
@@ -338,15 +382,19 @@ if __name__ == "__main__":
         name="CollatePermutations",
         mem_gb=64,
         cpus_per_task=2,
-#       slurm_output=f"{collated_dir}/collate_%a.out",
+        slurm_time="60:00",
+        #       slurm_output=f"{collated_dir}/collate_%a.out",
     )
-    jobs = executor.map_array(lazy_collate, runs)
-    _ = [job.result() for job in jobs]
+#   jobs = executor.map_array(newcollate, runs)
+#   _ = [job.wait() for job in jobs]
     print(timestamp(), "Collating Finished")
 
     # Generate Image Files
     print(timestamp(), "Generating Images")
-    executor.update_parameters(name="GenerateImages")
+    executor.update_parameters(
+            name="GenerateImages",
+            slurm_time="20:00",
+                               )
     jobs = []
     with executor.batch():
         for samplename in samples:
@@ -354,5 +402,5 @@ if __name__ == "__main__":
                 make_annotated_image, samplename, GENE_DICT, collated_dir, image_dir
             )
             jobs.append(job)
-    _ = [job.result() for job in jobs]
+    _ = [job.wait() for job in jobs]
     print(timestamp(), "Finished")
