@@ -256,15 +256,18 @@ def make_annotated_image(samplename, gene_list, collated_dir, img_outdir):
     collated_f = collated_dir / f"{samplename}.parquet"
     print(f"{timestamp()} Reading collated permutations from {collated_f}", flush=True)
     collated_permutations = pl.read_parquet(collated_f)
-    print(f"{timestamp()} Collated file has columns {collated_permutations.columns}", flush=True)
+    print(
+        f"{timestamp()} Collated file has columns {collated_permutations.columns}",
+        flush=True,
+    )
 
     print("Calculating ROIs:", flush=True)
     # find spots whose MaxMin is below the max permutation
     # and extract their barcodes and coordinates
     bcs = {}
-#   collated_permutations = collated_permutations.with_columns(
-#       pl.col("low").list.max().alias("threshold")
-#   )
+    #   collated_permutations = collated_permutations.with_columns(
+    #       pl.col("low").list.max().alias("threshold")
+    #   )
     print(f"{timestamp()} Joinings positions file with thresholds", flush=True)
     joined = collated_permutations.join(pos, on="barcode")
     print(f"{timestamp()} joined dataframe has columns {joined.columns}", flush=True)
@@ -298,8 +301,8 @@ if __name__ == "__main__":
     userroot = Path("/scratch.global") / username
     userroot.mkdir(exist_ok=True)
 
-    #   projectroot = userroot / f"permutation_{datestamp}"
-    projectroot = userroot / "permutation_20260820"
+    projectroot = userroot / f"permutation_{datestamp}"
+    #   projectroot = userroot / "permutation_20260820"
     projectroot.mkdir(exist_ok=True)
 
     collated_dir = projectroot / "collated"
@@ -357,8 +360,8 @@ if __name__ == "__main__":
         slurm_time="06:00:00",
         cpus_per_task=4,
     )
-    #   jobs = executor.map_array(permute_sample, runs)
-    #   _ = [job.wait() for job in jobs]
+    jobs = executor.map_array(permute_sample, runs)
+    _ = [job.wait() for job in jobs]
     print(timestamp(), "Permuting Finished")
     print("Sanity Check:")
     for samplename in samples:
@@ -385,16 +388,16 @@ if __name__ == "__main__":
         slurm_time="60:00",
         #       slurm_output=f"{collated_dir}/collate_%a.out",
     )
-#   jobs = executor.map_array(newcollate, runs)
-#   _ = [job.wait() for job in jobs]
+    jobs = executor.map_array(newcollate, runs)
+    _ = [job.wait() for job in jobs]
     print(timestamp(), "Collating Finished")
 
     # Generate Image Files
     print(timestamp(), "Generating Images")
     executor.update_parameters(
-            name="GenerateImages",
-            slurm_time="20:00",
-                               )
+        name="GenerateImages",
+        slurm_time="20:00",
+    )
     jobs = []
     with executor.batch():
         for samplename in samples:
