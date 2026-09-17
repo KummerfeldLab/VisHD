@@ -24,6 +24,7 @@ samples = [
     "H1-TQXC9QB_A1",
     "H1-TQXC9QB_D1",
     "H1-HDMGRMD_A1",
+    "H1-HDMGRMD_D1",
 ]
 
 
