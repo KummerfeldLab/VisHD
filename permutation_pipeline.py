@@ -303,7 +303,6 @@ if __name__ == "__main__":
     userroot.mkdir(exist_ok=True)
 
     projectroot = userroot / f"permutation_{datestamp}"
-    #   projectroot = userroot / "permutation_20260820"
     projectroot.mkdir(exist_ok=True)
 
     collated_dir = projectroot / "collated"
@@ -357,7 +356,6 @@ if __name__ == "__main__":
     executor.update_parameters(
         name="VisHDPermute",
         slurm_job_name="VisHDPermute",
-        #       slurm_output="permute_%a.out",
         slurm_time="06:00:00",
         cpus_per_task=4,
     )
