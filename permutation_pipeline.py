@@ -53,8 +53,10 @@ def permute_sample(runinfo):
     runnum = runinfo["i"]
     topdir = runinfo["projectroot"]
     count_table = runinfo["count_table"]
-    start = runnum * PERMS_PER_RUN
-    end = start + PERMS_PER_RUN
+    perms_per_run = runinfo.get("perms_per_run", PERMS_PER_RUN)
+    positions_dir = runinfo.get("positions_dir", POSITIONS_DIR)
+    start = runnum * perms_per_run
+    end = start + perms_per_run
 
     # Set/Create output directory
     outdir = topdir / samplename
@@ -64,32 +66,39 @@ def permute_sample(runinfo):
     lf_path = topdir / f"longform/{samplename}.parquet"
     longform = pl.read_parquet(lf_path)
 
-    # Explode all the gene categories
+    # Determine the gene categories to permute
     null_perm = []
-    for cat, n in zip(count_table["category"], count_table["Total"]):
-        null_perm += [cat] * n
+    sample_slice = slice(None)
+    if runinfo["permute_all_samples"]:
+        # Create a list of the gene_categories, each category appearing 
+        # as many times as the Total column in the same row in the count_table
+        for cat, n in zip(count_table["category"], count_table["Total"]):
+            null_perm += [cat] * n
 
-    # Determine the indices of the permutation belonging to all samples
-    indices = {}
-    cumsum = 0
-    for s in count_table.columns[1:-1]:
-        begin = cumsum
-        cumsum = begin + count_table[s].sum()
-        indices[s] = (begin, cumsum)
+        # Determine the indices of the permutation belonging to all samples
+        indices = {}
+        cumsum = 0
+        for s in count_table.columns[1:-1]:
+            begin = cumsum
+            cumsum = begin + count_table[s].sum()
+            indices[s] = (begin, cumsum)
 
-    # Determine the indices of the permutaiton belonging to this sample
-    start_idx, end_idx = indices[samplename]
+        # Determine the indices of the permutaiton belonging to this sample
+        sample_slice = slice(*indices[samplename])
+    else:
+        # Create a list of the gene_categories, each category appearing 
+        # as many times as the Total column in the same row in the count_table
+        for cat, n in zip(count_table["category"], count_table[samplename]):
+            null_perm += [cat] * n
 
     # read the positions data
-    positions = pl.read_parquet(POSITIONS_DIR / f"{samplename}_bladed.parquet")
+    positions = pl.read_parquet(positions_dir / f"{samplename}_bladed.parquet")
     results = positions.select("barcode")
 
     # Permute the base list of gene categories and save as a column
     for i in range(start, end):
         print(i, flush=True)
-        permutation = np.random.default_rng(seed=i).permuted(null_perm)[
-            start_idx:end_idx
-        ]
+        permutation = np.random.default_rng(seed=i).permuted(null_perm)[sample_slice]
         results = results.with_columns(
             pl.lit(
                 PermuteAllSamples.evaluate_permutation(longform, permutation, positions)
@@ -99,19 +108,25 @@ def permute_sample(runinfo):
     results.write_parquet(outdir / f"{samplename}_{start}_{end}.parquet")
 
 
-def make_gene_count_table(samples, longformdir, gene_dict=GENE_DICT):
+def make_gene_count_table(
+    samples,
+    longformdir,
+    gene_dict=GENE_DICT,
+    positions_dir=POSITIONS_DIR,
+    spaceranger_dir=local.spaceranger_outputs_dir,
+):
     """Reads each sample in `samples`, and returns a sample counting the number
     of genes in the values of each key of gene_dict as well as the number of non-category genes.
     Also outputs the longform barcodes to the longform directory"""
     table = pl.DataFrame()
     for samplename in samples:
-        print("\t{timestamp()} {samplename}: Reading Data")
-        sampledir = local.spaceranger_outputs_dir / samplename
+        print(f"\t{timestamp()} {samplename}: Reading Data")
+        sampledir = spaceranger_dir / samplename
         adata = SEAC.read_h5(sampledir / "outs/binned_outputs/square_002um")
-        pos = pl.read_parquet(local.bladed_d / f"{sampledir.name}_bladed.parquet")
+        pos = pl.read_parquet(positions_dir / f"{sampledir.name}_bladed.parquet")
 
         # Create a long form table
-        print("\t{timestamp()} {samplename}: Reformatting")
+        print(f"\t{timestamp()} {samplename}: Reformatting")
         row, col, count = scipy.sparse.find(adata.X)
         df = pl.DataFrame(
             {
@@ -151,37 +166,11 @@ def make_gene_count_table(samples, longformdir, gene_dict=GENE_DICT):
     return table
 
 
-def collate(jobinfo):
-    samplename = jobinfo["samplename"]
-    topdir = jobinfo["projectroot"]
-    outdir = jobinfo["outdir"]
-    permutation_dir = topdir / samplename
-
-    df = pl.DataFrame()
-    for nfiles, f in enumerate(permutation_dir.iterdir(), start=1):
-        gc.collect()
-        if nfiles == 1:
-            df = pl.read_parquet(f)
-        else:
-            df = df.join(pl.read_parquet(f), on="barcode")
-
-    df = df.select(
-        pl.col("barcode"),
-        pl.concat_list(pl.exclude("barcode"))
-        .list.sort()
-        .list.head(50)
-        .list.max()
-        .alias("threshold"),
-    )
-    gc.collect()
-
-    df.write_parquet(outdir / f"{samplename}.parquet")
-
-
 def newcollate(jobinfo):
     samplename = jobinfo["samplename"]
     topdir = jobinfo["projectroot"]
     outdir = jobinfo["outdir"]
+    n_lowest = jobinfo.get("n_lowest", 50)
     permutation_dir = topdir / samplename
 
     barcodes = []
@@ -203,8 +192,8 @@ def newcollate(jobinfo):
             chunk = array
         else:
             chunk = np.hstack([chunk, array])
-        print(f"{timestamp()} selecting lowest 50", flush=True)
-        chunk = np.partition(chunk, 50, axis=1)[:, :50]
+        print(f"{timestamp()} selecting lowest {n_lowest}", flush=True)
+        chunk = np.partition(chunk, n_lowest, axis=1)[:, :n_lowest]
     print(f"{timestamp()} selecting row-wise max", flush=True)
     thresholds = chunk.max(axis=1)
     result = pyarrow.Table.from_arrays(
@@ -214,41 +203,10 @@ def newcollate(jobinfo):
     pyarrow.parquet.write_table(result, outdir / f"{samplename}.parquet")
 
 
-def lazy_collate(jobinfo):
-    samplename = jobinfo["samplename"]
-    topdir = jobinfo["projectroot"]
-    outdir = jobinfo["outdir"]
-    permutation_dir = topdir / samplename
-    print(f"{timestamp()} Collating {samplename}")
-    print(f"Source dirctory: {permutation_dir}")
-
-    #   lazy_frames = [pl.scan_parquet(f) for f in permutation_dir.iterdir()]
-    files = list(permutation_dir.iterdir())
-    lazy_frames = [pl.scan_parquet(files[0])] + [
-        pl.scan_parquet(f).drop("barcode") for f in files[1:]
-    ]
-    print(f"Found {len(lazy_frames)} files")
-
-    #   merged = lazy_frames[0]
-    #   for lf in lazy_frames[1:]:
-    #       merged = merged.join(lf, on="barcode", how="inner")
-
-    merged = pl.concat(lazy_frames, how="horizontal").select(
-        pl.col("barcode"),
-        pl.concat_list(pl.exclude("barcode"))
-        .list.sort()
-        .list.head(50)
-        .list.max()
-        .alias("threshold"),
-    )
-
-    print(f"writing {outdir}/{samplename}.parquet")
-    merged.sink_parquet(outdir / f"{samplename}.parquet")
-    print(f"{timestamp()} Finished Collating {samplename}")
-
-
-def make_annotated_image(samplename, gene_list, collated_dir, img_outdir):
-    positions_filename = local.bladed_d / f"{samplename}_bladed.parquet"
+def make_annotated_image(
+    samplename, gene_list, collated_dir, img_outdir, positions_dir=POSITIONS_DIR
+):
+    positions_filename = positions_dir / f"{samplename}_bladed.parquet"
     print(f"{timestamp()} Reading positions data from {positions_filename}", flush=True)
     pos = pl.read_parquet(positions_filename)
     pos = pos.filter(pl.col("MaxMin").le(100), pl.col("blade").eq(0))
@@ -292,18 +250,87 @@ def make_annotated_image(samplename, gene_list, collated_dir, img_outdir):
     print("Done", end="\n\n")
 
 
-if __name__ == "__main__":
-    username = getpass.getuser()
-    chitime = datetime.datetime.now(tz=ZoneInfo("America/Chicago"))
-    datestamp = chitime.strftime("%Y%m%d")
+def run_pipeline(
+    samples=samples,
+    gene_dict=GENE_DICT,
+    projectroot=None,
+    scratch_root=Path("/scratch.global"),
+    positions_dir=POSITIONS_DIR,
+    spaceranger_dir=local.spaceranger_outputs_dir,
+    n_runs=50,
+    perms_per_run=PERMS_PER_RUN,
+    n_lowest=50,
+    slurm_account="lniedern",
+    mem_gb=64,
+    count_table_time="30:00",
+    permute_time="06:00:00",
+    permute_cpus=4,
+    collate_time="60:00",
+    collate_cpus=2,
+    image_time="20:00",
+    permute_all_samples=False,
+):
+    """Run the full permutation pipeline on slurm.
 
+    Phases: build the gene category count table, permute each sample,
+    collate the permutations into per-barcode thresholds, and image hotspots.
+    Each sample gets n_runs * perms_per_run permutations; the per-barcode
+    threshold is the max of the n_lowest permuted MaxMin values.
+
+    Parameters
+    ----------
+    samples : list of str
+        Sample names to process.
+    gene_dict : dict
+        Maps category name -> list of genes. Genes in no category are
+        counted as "Other".
+    projectroot : Path or None
+        Output directory for all pipeline products. If None, defaults to
+        <scratch_root>/<user>/permutation_<YYYYMMDD> (Chicago time).
+    scratch_root : Path
+        Parent of the per-user directory; only used when projectroot is None.
+    positions_dir : Path
+        Directory of <sample>_bladed.parquet position files.
+    spaceranger_dir : Path
+        Directory of spaceranger outputs, one subdirectory per sample.
+    n_runs : int
+        Number of permutation jobs per sample.
+    perms_per_run : int
+        Number of permutations computed by each job.
+    n_lowest : int
+        Number of lowest permuted MaxMin values per barcode used to set the
+        threshold. Keep at ~1% of n_runs * perms_per_run.
+    slurm_account : str
+        Slurm account to charge jobs to.
+    mem_gb : int
+        Memory (GB) requested for each job.
+    count_table_time : str
+        Slurm time limit for the count table job.
+    permute_time : str
+        Slurm time limit for each permutation job.
+    permute_cpus : int
+        CPUs per permutation job.
+    collate_time : str
+        Slurm time limit for each collate job.
+    collate_cpus : int
+        CPUs per collate job.
+    image_time : str
+        Slurm time limit for each image job.
+    permute_all_samples : bool
+        If True, permute gene categories pooled across all samples; if False,
+        permute each sample's own gene categories only.
+    """
     # Create Permuation Output Directories
     print(timestamp(), "creating directories")
-    userroot = Path("/scratch.global") / username
-    userroot.mkdir(exist_ok=True)
-
-    projectroot = userroot / f"permutation_{datestamp}"
-    projectroot.mkdir(exist_ok=True)
+    if projectroot is None:
+        username = getpass.getuser()
+        chitime = datetime.datetime.now(tz=ZoneInfo("America/Chicago"))
+        datestamp = chitime.strftime("%Y%m%d")
+        userroot = Path(scratch_root) / username
+        userroot.mkdir(exist_ok=True)
+        projectroot = userroot / f"permutation_{datestamp}"
+    projectroot = Path(projectroot)
+    projectroot.mkdir(parents=True, exist_ok=True)
 
     collated_dir = projectroot / "collated"
     collated_dir.mkdir(exist_ok=True)
@@ -322,7 +349,9 @@ if __name__ == "__main__":
 
     # Instantiate Job executor
     executor = submitit.AutoExecutor(folder=log_dir)
-    executor.update_parameters(slurm_account="lniedern", mem_gb=64, slurm_time="30:00")
+    executor.update_parameters(
+        slurm_account=slurm_account, mem_gb=mem_gb, slurm_time=count_table_time
+    )
 
     # Make Gene Category table
     if not (projectroot / "count_table.parquet").exists():
@@ -332,7 +361,14 @@ if __name__ == "__main__":
             #           slurm_output="Make_Count_Table.log",
         )
 
-        job = executor.submit(make_gene_count_table, samples, longformdir, GENE_DICT)
+        job = executor.submit(
+            make_gene_count_table,
+            samples,
+            longformdir,
+            gene_dict,
+            positions_dir,
+            spaceranger_dir,
+        )
         count_table = job.result()
         print(timestamp(), "count table finished")
     else:
@@ -342,12 +378,15 @@ if __name__ == "__main__":
     # Create  Dictionary of Run Data
     runs = []
     for samplename in samples:
-        for i in range(50):
+        for i in range(n_runs):
             perm_d = {
                 "samplename": samplename,
                 "i": i,
                 "projectroot": projectroot,
                 "count_table": count_table,
+                "perms_per_run": perms_per_run,
+                "positions_dir": positions_dir,
+                "permute_all_samples": permute_all_samples,
             }
             runs.append(perm_d)
 
@@ -356,8 +395,8 @@ if __name__ == "__main__":
     executor.update_parameters(
         name="VisHDPermute",
         slurm_job_name="VisHDPermute",
-        slurm_time="06:00:00",
-        cpus_per_task=4,
+        slurm_time=permute_time,
+        cpus_per_task=permute_cpus,
     )
     jobs = executor.map_array(permute_sample, runs)
     _ = [job.wait() for job in jobs]
@@ -376,15 +415,16 @@ if __name__ == "__main__":
             "samplename": sample,
             "projectroot": projectroot,
             "outdir": collated_dir,
+            "n_lowest": n_lowest,
         }
         runs.append(collate_d)
 
     print(timestamp(), "Collating Permutations")
     executor.update_parameters(
         name="CollatePermutations",
-        mem_gb=64,
-        cpus_per_task=2,
-        slurm_time="60:00",
+        mem_gb=mem_gb,
+        cpus_per_task=collate_cpus,
+        slurm_time=collate_time,
         #       slurm_output=f"{collated_dir}/collate_%a.out",
     )
     jobs = executor.map_array(newcollate, runs)
@@ -395,14 +435,23 @@ if __name__ == "__main__":
     print(timestamp(), "Generating Images")
     executor.update_parameters(
         name="GenerateImages",
-        slurm_time="20:00",
+        slurm_time=image_time,
     )
     jobs = []
     with executor.batch():
         for samplename in samples:
             job = executor.submit(
-                make_annotated_image, samplename, GENE_DICT, collated_dir, image_dir
+                make_annotated_image,
+                samplename,
+                gene_dict,
+                collated_dir,
+                image_dir,
+                positions_dir,
             )
             jobs.append(job)
     _ = [job.wait() for job in jobs]
     print(timestamp(), "Finished")
+
+
+if __name__ == "__main__":
+    run_pipeline()
