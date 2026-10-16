@@ -110,7 +110,7 @@ def evaluate_permutation(longform, permutedgenes, positions):
             .to_numpy()
         )
         tree = KDTree(category_coords)
-        distances, _ = tree.query(all_coords)
+        distances, _ = tree.query(all_coords, workers=-1)
         positions = positions.with_columns(
             pl.lit(np.ceil(distances).astype(int)).alias(category)
         )

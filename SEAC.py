@@ -147,7 +147,7 @@ def make_bladed_maxMin_positionsFiles(p, outdir):
                                      pl.col("barcode").is_in(bc)
                                     ).select("array_row", "array_col").to_numpy()
         tree = KDTree(category_coords)
-        min_distances, _ = tree.query(all_coords)
+        min_distances, _ = tree.query(all_coords, workers=-1)
         bladed = bladed.with_columns(pl.lit(np.ceil(min_distances)).alias(category))
 
 
