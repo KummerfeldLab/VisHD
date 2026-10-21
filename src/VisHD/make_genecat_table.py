@@ -1,7 +1,7 @@
 import scipy
 import polars as pl
 import sys
-from SEAC import SEAC
+from VisHD.SEAC import SEAC
 
 genelists = SEAC
 outdir = sys.argv[1]
