@@ -382,10 +382,8 @@ def run_pipeline(
             spaceranger_dir,
         )
         job.wait()
-        count_table = pl.read_parquet(projectroot / "count_table.parquet")
         print(timestamp(), "count table finished")
-    else:
-        count_table = pl.read_parquet(projectroot / "count_table.parquet")
+    count_table = pl.read_parquet(projectroot / "count_table.parquet")
     print(count_table)
 
     # Create  Dictionary of Run Data
