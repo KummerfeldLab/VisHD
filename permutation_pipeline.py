@@ -381,6 +381,7 @@ def run_pipeline(
             positions_dir,
             spaceranger_dir,
         )
+        job.wait()
         count_table = job.result()
         print(timestamp(), "count table finished")
     else:
