@@ -4,7 +4,7 @@ import datetime
 from zoneinfo import ZoneInfo
 import time
 from pathlib import Path
-from VisHD import local, PermuteAllSamples, SEAC
+from VisHD import local, SEAC
 import VisHD.Visualize as viz
 import scipy
 import gc
@@ -57,53 +57,65 @@ def permute_sample(runinfo):
     positions_dir = runinfo.get("positions_dir", POSITIONS_DIR)
     start = runnum * perms_per_run
     end = start + perms_per_run
+    threshold = 100
 
     # Set/Create output directory
     outdir = topdir / samplename
     outdir.mkdir(exist_ok=True)
 
-    # Read samples longform barcodes
+    # Read samples longform barcodes, this tells us where the reads were found, and how many
     lf_path = topdir / f"longform/{samplename}.parquet"
     longform = pl.read_parquet(lf_path)
 
-    # Determine the gene categories to permute
-    null_perm = []
-    sample_slice = slice(None)
-    if runinfo["permute_all_samples"]:
-        # Create a list of the gene_categories, each category appearing 
-        # as many times as the Total column in the same row in the count_table
-        for cat, n in zip(count_table["category"], count_table["Total"]):
-            null_perm += [cat] * n
-
-        # Determine the indices of the permutation belonging to all samples
-        indices = {}
-        cumsum = 0
-        for s in count_table.columns[1:-1]:
-            begin = cumsum
-            cumsum = begin + count_table[s].sum()
-            indices[s] = (begin, cumsum)
-
-        # Determine the indices of the permutaiton belonging to this sample
-        sample_slice = slice(*indices[samplename])
-    else:
-        # Create a list of the gene_categories, each category appearing 
-        # as many times as the Total column in the same row in the count_table
-        for cat, n in zip(count_table["category"], count_table[samplename]):
-            null_perm += [cat] * n
-
-    # read the positions data
+    # read the positions data to get barcodes for the results file
     positions = pl.read_parquet(positions_dir / f"{samplename}_bladed.parquet")
-    results = positions.select("barcode")
+    # restrict positions to spots not set for blade and are in tissue
+    positions = positions.filter(pl.col('blade').eq(0),
+                                 pl.col('in_tissue').eq(1))
 
-    # Permute the base list of gene categories and save as a column
+    # make a reduced copy of positions to contain only candidate hotspot rows
+    # hotspots must have a MaxMin distance less than threshold
+    hotspot_pos = positions.filter(pl.col("MaxMin").le(threshold))
+    # make a numpy array of the hotspot coordinates
+    hotspot_coords = hotspot_pos.select("array_row", "array_col").to_numpy()
+    # create a new table for storing distance results
+    results = hotspot_pos.select("barcode")
+    # barcode -> coordinates lookup for the permuted read locations
+    coords_by_barcode = positions.select("barcode", "array_row", "array_col")
+
+    # lookup how many SEAC gene hits are in the sample for each category
+    nhits = {
+        category: count_table.filter(pl.col("category").eq(category))[samplename].item()
+        for category in SEAC.SEAC.keys()
+    }
+
+    # From start to end, make a table of permuted MaxMin values
     for i in range(start, end):
         print(i, flush=True)
-        permutation = np.random.default_rng(seed=i).permuted(null_perm)[sample_slice]
-        results = results.with_columns(
-            pl.lit(
-                PermuteAllSamples.evaluate_permutation(longform, permutation, positions)
-            ).alias(str(i))
-        )
+
+        # shuffle all read locations once using i as the seed; consecutive slices
+        # of the shuffle are assigned to each category (sampling without replacement)
+        order = np.random.default_rng(seed=i).permutation(longform.height)
+        offset = 0
+        distances = []
+        for category, n in nhits.items():
+            # select barcodes of the read locations assigned to this category
+            seacgene_idxs = order[offset:offset + n]
+            offset += n
+            seacgene_barcodes = longform[seacgene_idxs].select("barcode").unique()
+            # select coordinates of those barcodes
+            seacgene_coords = (
+                coords_by_barcode.join(seacgene_barcodes, on="barcode")
+                .select("array_row", "array_col")
+                .to_numpy()
+            )
+
+            # build tree of seacgene_coords and get distances to them from hotspots
+            tree = KDTree(seacgene_coords)
+            d, _ = tree.query(hotspot_coords, workers=-1)
+            distances.append(d)
+        # MaxMin: the max over categories of the min distance to each category
+        results = results.with_columns(pl.Series(str(i), np.max(distances, axis=0)))
 
     results.write_parquet(outdir / f"{samplename}_{start}_{end}.parquet")
 
