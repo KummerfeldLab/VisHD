@@ -178,7 +178,7 @@ def make_gene_count_table(
     return table
 
 
-def newcollate(jobinfo):
+def collate(jobinfo):
     samplename = jobinfo["samplename"]
     topdir = jobinfo["projectroot"]
     outdir = jobinfo["outdir"]
@@ -438,7 +438,7 @@ def run_pipeline(
         slurm_time=collate_time,
         #       slurm_output=f"{collated_dir}/collate_%a.out",
     )
-    jobs = executor.map_array(newcollate, runs)
+    jobs = executor.map_array(collate, runs)
     _ = [job.wait() for job in jobs]
     print(timestamp(), "Collating Finished")
 
