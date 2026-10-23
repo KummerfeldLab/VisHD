@@ -65,7 +65,7 @@ def permute_sample(runinfo):
 
     # Read samples longform barcodes, this tells us where the reads were found, and how many
     lf_path = topdir / f"longform/{samplename}.parquet"
-    longform = pl.read_parquet(lf_path)
+    longform = pl.read_parquet(lf_path)['barcode']
 
     # read the positions data to get barcodes for the results file
     positions = pl.read_parquet(positions_dir / f"{samplename}_bladed.parquet")
@@ -80,35 +80,33 @@ def permute_sample(runinfo):
     hotspot_coords = hotspot_pos.select("array_row", "array_col").to_numpy()
     # create a new table for storing distance results
     results = hotspot_pos.select("barcode")
-    # barcode -> coordinates lookup for the permuted read locations
-    coords_by_barcode = positions.select("barcode", "array_row", "array_col")
 
     # lookup how many SEAC gene hits are in the sample for each category
     nhits = {
         category: count_table.filter(pl.col("category").eq(category))[samplename].item()
-        for category in SEAC.SEAC.keys()
+        for category in SEAC.SEAC.keys() # eliminates 'Other' if it still exists in table
     }
 
-    # From start to end, make a table of permuted MaxMin values
+    # Main Loop 
+    # Make a table of MaxMin distances to permuted gene category locations
     for i in range(start, end):
-        print(i, flush=True)
+        print(i, timestamp(), flush=True)
 
-        # shuffle all read locations once using i as the seed; consecutive slices
-        # of the shuffle are assigned to each category (sampling without replacement)
-        order = np.random.default_rng(seed=i).permutation(longform.height)
-        offset = 0
+        # From longform, choose the barcodes to hold seac genes
+        # Selecting by index is faster than handling a few million strings
+        seac_indices = np.random.default_rng(seed=i).choice(len(longform), sum(nhits.values()), replace=False)
+        seac_barcodes = longform[seac_indices]
+        # distances will hold KDTree results
         distances = []
         for category, n in nhits.items():
-            # select barcodes of the read locations assigned to this category
-            seacgene_idxs = order[offset:offset + n]
-            offset += n
-            seacgene_barcodes = longform[seacgene_idxs].select("barcode").unique()
-            # select coordinates of those barcodes
+            # select coordinates of the first n barcodes
             seacgene_coords = (
-                coords_by_barcode.join(seacgene_barcodes, on="barcode")
+                    positions.filter(pl.col("barcode").is_in(seac_barcodes[:n]))
                 .select("array_row", "array_col")
                 .to_numpy()
             )
+            # update seac_barcodes to remove those used in the step above
+            seac_barcodes = seac_barcodes[n:]
 
             # build tree of seacgene_coords and get distances to them from hotspots
             tree = KDTree(seacgene_coords)
@@ -178,7 +176,7 @@ def make_gene_count_table(
     return table
 
 
-def newcollate(jobinfo):
+def collate(jobinfo):
     samplename = jobinfo["samplename"]
     topdir = jobinfo["projectroot"]
     outdir = jobinfo["outdir"]
@@ -438,7 +436,7 @@ def run_pipeline(
         slurm_time=collate_time,
         #       slurm_output=f"{collated_dir}/collate_%a.out",
     )
-    jobs = executor.map_array(newcollate, runs)
+    jobs = executor.map_array(collate, runs)
     _ = [job.wait() for job in jobs]
     print(timestamp(), "Collating Finished")
 
