@@ -1,32 +1,43 @@
 # VisHD package structure (draft)
 
-This branch starts from Lee's `uv` branch and adds a first layer for configuration and job execution. It is a structure proposal for the team, not a choice of scientific method.
+This branch starts from Lee's `uv` branch and adds a first layer for configuration and job execution. It is a structure proposal, not a choice of scientific method.
 
-The main README is unchanged from `uv`; it still describes the earlier `local.py` and SLURM workflow. This outline describes the proposed direction for review.
+## Current files (selected)
 
 ```text
 VisHD/
-├── pyproject.toml, uv.lock       # Lee's packaging foundation
-├── config/vishd.example.toml    # example user settings
+├── pyproject.toml
+├── uv.lock
+├── config/
+│   └── vishd.example.toml
 ├── src/VisHD/
-│   ├── config.py                # paths and execution settings
-│   ├── execution/               # local or SLURM job launcher
-│   ├── permutation_pipeline.py  # Lee's current pipeline, adapted to use these settings
-│   ├── readers/                 # proposed: Visium HD and CosMx input adapters
-│   ├── methods/                 # proposed: Lee and Mac implementations behind a common interface
-│   └── results.py               # proposed: shared output writing
-└── tests/                        # small package tests
+│   ├── __init__.py
+│   ├── config.py
+│   ├── execution/
+│   │   ├── __init__.py
+│   │   ├── local_backend.py
+│   │   └── slurm.py
+│   ├── permutation_pipeline.py
+│   └── Visualize.py
+└── tests/
+    ├── test_config.py
+    └── test_execution.py
 ```
 
-The `readers/`, `methods/`, and `results.py` entries are proposed locations; they have not been implemented. Existing modules stay in place during the transition.
+These are the relevant files that exist now; Lee's other modules remain in `src/VisHD`.
 
-## Why these boundaries?
+## Current state
 
-- **User settings live outside the installed package.** A TOML file or Python object supplies paths and compute settings. This avoids editing a machine-specific `local.py` inside package code.
-- **Job execution is separate from the analysis method.** Local execution works without a cluster; SLURM is an optional extra. CPU/GPU selection is a separate concern from local/SLURM job submission.
-- **Readers and methods need separate interfaces.** Lee's pipeline uses BLADE position tables and KD-tree distances. Mac's separately supplied `cpu-visium.py` and `visium.py` use Space Ranger count matrices, dense grids, and CPU/GPU distance transforms. A shared input representation and output contract would let us compare them without assuming either is the final method. Mac's scripts have not been copied into this branch.
-- **GPU integration is pending.** The optional GPU dependency is declared, but the public pipeline reports that GPU execution is not connected yet.
+- Lee's pipeline now takes paths and compute settings from a TOML file or Python object. It runs locally by default; SLURM requires the optional `submitit` extra.
+- The older experimental modules still use the `local.py` convention. Mac's scripts have not been added to this repository.
+- The GPU extra is declared, but the public pipeline does not run Mac's GPU method yet.
+- Tests cover configuration, local job execution, and basic imports. They do not run a full sample or check biological results.
+- The README still describes the earlier setup and needs updating after the team agrees on the structure.
 
-The current tests cover configuration, local job execution, and basic package import. They do not validate biological results or run a full sample.
+## Proposed next modules
 
-**Feedback requested:** Do these module boundaries fit how Lee, Mac, and Yin expect to contribute? Should the first shared input representation be a table of `(sample, x, y, gene, count)`, or is another shape better for both Visium HD and CosMx?
+Lee's pipeline uses BLADE positions and a KD-tree. Mac's separate `cpu-visium.py` and `visium.py` use Space Ranger counts and dense-grid distance transforms. Proposed `readers/` would convert platform data into one input format; proposed `methods/` would run either analysis on that input and return one result format. `results.py` could save the results. These modules do not exist yet.
+
+Do these module boundaries fit how everyone expects to contribute? Should the first shared input representation be a table of `(sample, x, y, gene, count)`, or is another shape better for both Visium HD and CosMx?
+
+Also, what name do we want for the package? Since we're serving both Visium HD and CosMx, we should consider something different from VisHD.
