@@ -102,7 +102,7 @@ def permute_sample(runinfo):
         for category, n in nhits.items():
             # select coordinates of the first n barcodes
             seacgene_coords = (
-                    positions.filter(pl.col("barcode").is_in(seac_barcodes[:n]))
+                    positions.filter(pl.col("barcode").is_in(seac_barcodes[:n].implode()))
                 .select("array_row", "array_col")
                 .to_numpy()
             )
@@ -217,10 +217,11 @@ def collate(jobinfo):
 def make_annotated_image(
     samplename, gene_list, collated_dir, img_outdir, positions_dir=POSITIONS_DIR
 ):
+    threshold = 100
     positions_filename = positions_dir / f"{samplename}_bladed.parquet"
     print(f"{timestamp()} Reading positions data from {positions_filename}", flush=True)
     pos = pl.read_parquet(positions_filename)
-    pos = pos.filter(pl.col("MaxMin").le(100), pl.col("blade").eq(0))
+    pos = pos.filter(pl.col("MaxMin").le(threshold), pl.col("blade").eq(0))
     print(f"{timestamp()} Positions file has columns {pos.columns}", flush=True)
 
     collated_f = collated_dir / f"{samplename}.parquet"
