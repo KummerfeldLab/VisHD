@@ -2419,13 +2419,15 @@ dependencies = [
     { name = "scanpy", version = "1.12.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "submitit" },
     { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
 gpu = [
     { name = "cupy-cuda12x" },
+]
+slurm = [
+    { name = "submitit" },
 ]
 
 [package.metadata]
@@ -2438,10 +2440,10 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "scanpy" },
     { name = "scipy" },
-    { name = "submitit" },
+    { name = "submitit", marker = "extra == 'slurm'" },
     { name = "tqdm" },
 ]
-provides-extras = ["gpu"]
+provides-extras = ["gpu", "slurm"]
 
 [[package]]
 name = "wrapt"

@@ -1,10 +1,9 @@
-import getpass
-import submitit
 import datetime
-from zoneinfo import ZoneInfo
 import time
 from pathlib import Path
-from VisHD import local, SEAC
+from VisHD import SEAC
+from VisHD.config import ExecutionConfig, SlurmConfig, VisHDConfig, load_config
+from VisHD.execution import make_executor
 import VisHD.Visualize as viz
 import scipy
 import gc
@@ -39,7 +38,7 @@ class PHASE(Enum):
 
 GENE_DICT = SEAC.SEAC
 PERMS_PER_RUN = 100
-POSITIONS_DIR = local.bladed_d
+POSITIONS_DIR = None
 
 
 def timestamp():
@@ -87,7 +86,7 @@ def permute_sample(runinfo):
         for category in SEAC.SEAC.keys() # eliminates 'Other' if it still exists in table
     }
 
-    # Main Loop 
+    # Main Loop
     # Make a table of MaxMin distances to permuted gene category locations
     for i in range(start, end):
         print(i, timestamp(), flush=True)
@@ -123,11 +122,16 @@ def make_gene_count_table(
     longformdir,
     gene_dict=GENE_DICT,
     positions_dir=POSITIONS_DIR,
-    spaceranger_dir=local.spaceranger_outputs_dir,
+    spaceranger_dir=None,
 ):
     """Reads each sample in `samples`, and returns a sample counting the number
     of genes in the values of each key of gene_dict as well as the number of non-category genes.
     Also outputs the longform barcodes to the longform directory"""
+    if positions_dir is None or spaceranger_dir is None:
+        raise ValueError("positions_dir and spaceranger_dir are required")
+    positions_dir = Path(positions_dir)
+    spaceranger_dir = Path(spaceranger_dir)
+
     table = pl.DataFrame()
     for samplename in samples:
         print(f"\t{timestamp()} {samplename}: Reading Data")
@@ -214,8 +218,15 @@ def collate(jobinfo):
 
 
 def make_annotated_image(
-    samplename, gene_list, collated_dir, img_outdir, positions_dir=POSITIONS_DIR
+    samplename,
+    gene_list,
+    collated_dir,
+    img_outdir,
+    positions_dir=POSITIONS_DIR,
+    spaceranger_dir=None,
 ):
+    if positions_dir is None or spaceranger_dir is None:
+        raise ValueError("positions_dir and spaceranger_dir are required")
     positions_filename = positions_dir / f"{samplename}_bladed.parquet"
     print(f"{timestamp()} Reading positions data from {positions_filename}", flush=True)
     pos = pl.read_parquet(positions_filename)
@@ -255,7 +266,12 @@ def make_annotated_image(
 
     print("\nImaging", end=" ")
     viz.make_multi_annotated_image(
-        samplename, joined, bcs, colors=viz.COLORS, outdir=img_outdir
+        samplename,
+        joined,
+        bcs,
+        colors=viz.COLORS,
+        outdir=img_outdir,
+        spaceranger_dir=spaceranger_dir,
     )
     print("Done", end="\n\n")
 
@@ -264,23 +280,25 @@ def run_pipeline(
     samples=samples,
     gene_dict=GENE_DICT,
     projectroot=None,
-    scratch_root=Path("/scratch.global"),
     positions_dir=POSITIONS_DIR,
-    spaceranger_dir=local.spaceranger_outputs_dir,
+    spaceranger_dir=None,
     n_runs=50,
     perms_per_run=PERMS_PER_RUN,
     n_lowest=50,
-    slurm_account="lniedern",
-    mem_gb=64,
-    count_table_time="30:00",
-    permute_time="06:00:00",
-    permute_cpus=4,
-    collate_time="60:00",
-    collate_cpus=2,
-    image_time="20:00",
+    slurm_account=None,
+    mem_gb=None,
+    count_table_time=None,
+    permute_time=None,
+    permute_cpus=None,
+    collate_time=None,
+    collate_cpus=None,
+    image_time=None,
     permute_all_samples=False,
+    *,
+    config=None,
+    execution=None,
 ):
-    """Run the full permutation pipeline on slurm.
+    """Run the full permutation pipeline locally or on SLURM.
 
     Phases: build the gene category count table, permute each sample,
     collate the permutations into per-barcode thresholds, and image hotspots.
@@ -295,10 +313,9 @@ def run_pipeline(
         Maps category name -> list of genes. Genes in no category are
         counted as "Other".
     projectroot : Path or None
-        Output directory for all pipeline products. If None, defaults to
-        <scratch_root>/<user>/permutation_<YYYYMMDD> (Chicago time).
-    scratch_root : Path
-        Parent of the per-user directory; only used when projectroot is None.
+        Output directory for all pipeline products. An explicit value overrides
+        ``config.paths.output_root``. Without either, a dated directory is made
+        below the current working directory.
     positions_dir : Path
         Directory of <sample>_bladed.parquet position files.
     spaceranger_dir : Path
@@ -310,35 +327,91 @@ def run_pipeline(
     n_lowest : int
         Number of lowest permuted MaxMin values per barcode used to set the
         threshold. Keep at ~1% of n_runs * perms_per_run.
-    slurm_account : str
-        Slurm account to charge jobs to.
-    mem_gb : int
-        Memory (GB) requested for each job.
-    count_table_time : str
-        Slurm time limit for the count table job.
-    permute_time : str
-        Slurm time limit for each permutation job.
-    permute_cpus : int
-        CPUs per permutation job.
-    collate_time : str
-        Slurm time limit for each collate job.
-    collate_cpus : int
-        CPUs per collate job.
-    image_time : str
-        Slurm time limit for each image job.
+    slurm_account : str or None
+        Compatibility shortcut for selecting SLURM without an ExecutionConfig.
+    mem_gb : int or None
+        Memory requested for each job. Overrides the configured SLURM value.
+    count_table_time, permute_time, collate_time, image_time : str or None
+        Per-phase SLURM time limits. Each overrides the configured general limit.
+    permute_cpus, collate_cpus : int or None
+        Per-phase CPU counts. Each overrides the configured general CPU count.
     permute_all_samples : bool
         If True, permute gene categories pooled across all samples; if False,
         permute each sample's own gene categories only.
+    config : VisHDConfig, path-like, or None
+        User configuration object or TOML file. Explicit function arguments take
+        precedence over configured paths.
+    execution : ExecutionConfig or None
+        Execution settings. Overrides ``config.execution`` when supplied.
     """
+    if config is not None and not isinstance(config, VisHDConfig):
+        config = load_config(config)
+
+    if config is not None:
+        if projectroot is None:
+            projectroot = config.paths.output_root
+        if positions_dir is None:
+            positions_dir = config.paths.positions_root
+        if spaceranger_dir is None:
+            spaceranger_dir = config.paths.spaceranger_root
+        if execution is None:
+            execution = config.execution
+
+    if execution is None:
+        if slurm_account is not None:
+            execution = ExecutionConfig(
+                backend="slurm",
+                slurm=SlurmConfig(
+                    account=slurm_account,
+                    memory_gb=mem_gb if mem_gb is not None else 64,
+                    cpus=permute_cpus if permute_cpus is not None else 4,
+                    time_limit=permute_time if permute_time is not None else "06:00:00",
+                ),
+            )
+        else:
+            execution = ExecutionConfig()
+    elif not isinstance(execution, ExecutionConfig):
+        raise TypeError("execution must be an ExecutionConfig")
+
+    if execution.use_gpu:
+        raise NotImplementedError(
+            "the GPU prototype is not yet connected to the unified run_pipeline API"
+        )
+
+    if execution.backend == "slurm":
+        slurm = execution.slurm
+        mem_gb = slurm.memory_gb if mem_gb is None else mem_gb
+        count_table_time = slurm.time_limit if count_table_time is None else count_table_time
+        permute_time = slurm.time_limit if permute_time is None else permute_time
+        permute_cpus = slurm.cpus if permute_cpus is None else permute_cpus
+        collate_time = slurm.time_limit if collate_time is None else collate_time
+        collate_cpus = slurm.cpus if collate_cpus is None else collate_cpus
+        image_time = slurm.time_limit if image_time is None else image_time
+    else:
+        mem_gb = 64 if mem_gb is None else mem_gb
+        count_table_time = "30:00" if count_table_time is None else count_table_time
+        permute_time = "06:00:00" if permute_time is None else permute_time
+        permute_cpus = 4 if permute_cpus is None else permute_cpus
+        collate_time = "60:00" if collate_time is None else collate_time
+        collate_cpus = 2 if collate_cpus is None else collate_cpus
+        image_time = "20:00" if image_time is None else image_time
+
+    if positions_dir is None:
+        raise ValueError(
+            "positions_dir is required; pass it directly or set paths.positions_root"
+        )
+    if spaceranger_dir is None:
+        raise ValueError(
+            "spaceranger_dir is required; pass it directly or set paths.spaceranger_root"
+        )
+    positions_dir = Path(positions_dir)
+    spaceranger_dir = Path(spaceranger_dir)
+
     # Create Permuation Output Directories
     print(timestamp(), "creating directories")
     if projectroot is None:
-        username = getpass.getuser()
-        chitime = datetime.datetime.now(tz=ZoneInfo("America/Chicago"))
-        datestamp = chitime.strftime("%Y%m%d")
-        userroot = Path(scratch_root) / username
-        userroot.mkdir(exist_ok=True)
-        projectroot = userroot / f"permutation_{datestamp}"
+        datestamp = datetime.date.today().strftime("%Y%m%d")
+        projectroot = Path.cwd() / f"permutation_{datestamp}"
     projectroot = Path(projectroot)
     projectroot.mkdir(parents=True, exist_ok=True)
 
@@ -358,10 +431,11 @@ def run_pipeline(
         (projectroot / sample).mkdir(exist_ok=True)
 
     # Instantiate Job executor
-    executor = submitit.AutoExecutor(folder=log_dir)
-    executor.update_parameters(
-        slurm_account=slurm_account, mem_gb=mem_gb, slurm_time=count_table_time
-    )
+    executor = make_executor(execution, log_dir)
+    phase_parameters = {"mem_gb": mem_gb, "slurm_time": count_table_time}
+    if execution.backend == "slurm":
+        phase_parameters["slurm_account"] = execution.slurm.account
+    executor.update_parameters(**phase_parameters)
 
     # Make Gene Category table
     if not (projectroot / "count_table.parquet").exists():
@@ -456,6 +530,7 @@ def run_pipeline(
                 collated_dir,
                 image_dir,
                 positions_dir,
+                spaceranger_dir,
             )
             jobs.append(job)
     _ = [job.wait() for job in jobs]

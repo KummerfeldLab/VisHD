@@ -2,7 +2,6 @@ import os
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,41).__str__()
 import json
 from VisHD.SEAC import SEAC
-from VisHD import local
 import polars as pl
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -68,7 +67,7 @@ def draw_spots(overlay, pos, color, sidelength=5):
         cv.rectangle(overlay, (int(x1), int(y1)), (int(x2), int(y2)), color, cv.FILLED)
 
 
-def make_annotated_image(samplename, positions):
+def make_annotated_image(samplename, positions, spaceranger_dir):
     """ returns an annotated image
 
     parameters:
@@ -89,7 +88,7 @@ def make_annotated_image(samplename, positions):
     """
  
     tif_ext = 'outs/spatial'
-    tif_d = local.spaceranger_outputs_dir / samplename / tif_ext
+    tif_d = Path(spaceranger_dir) / samplename / tif_ext
     for tif_f in (tif_d).iterdir():
         if 'tif' != tif_f.name[-3:]:
             continue
@@ -114,7 +113,18 @@ def make_annotated_image(samplename, positions):
     return final
 
 
-def make_multi_annotated_image(samplename, positions, barcodes, colors=COLORS, outdir=Path(), title="", sqr_pxls=5, cir_radius=10, cir_thickness=1):
+def make_multi_annotated_image(
+    samplename,
+    positions,
+    barcodes,
+    colors=COLORS,
+    outdir=Path(),
+    title="",
+    sqr_pxls=5,
+    cir_radius=10,
+    cir_thickness=1,
+    spaceranger_dir=None,
+):
     """ returns an annotated image
 
     parameters:
@@ -125,11 +135,14 @@ def make_multi_annotated_image(samplename, positions, barcodes, colors=COLORS, o
         colors: a dictionary of color values with the keys a subset of the keys in barcodes
     """
     
+    if spaceranger_dir is None:
+        raise ValueError("spaceranger_dir is required")
+
     # Read Positions file
 
     # Read in Tiff Image
     tif_ext = 'outs/spatial'
-    tif_d = local.spaceranger_outputs_dir / samplename / tif_ext
+    tif_d = Path(spaceranger_dir) / samplename / tif_ext
     # The filename of the tif is not consistant, so we search for the first tif in the directory
     for tif_f in (tif_d).iterdir():
         if 'tif' != tif_f.name[-3:]:
