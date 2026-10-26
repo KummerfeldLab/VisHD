@@ -68,6 +68,7 @@ def permute_sample(runinfo):
     longform = pl.read_parquet(lf_path)['barcode']
 
     # read the positions data to get barcodes for the results file
+    # and obtain non-permuted MaxMin distances
     positions = pl.read_parquet(positions_dir / f"{samplename}_bladed.parquet")
     # restrict positions to spots not set for blade and are in tissue
     positions = positions.filter(pl.col('blade').eq(0),
