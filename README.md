@@ -1,4 +1,4 @@
-# VIsHD
+# VisHD
 
 ## Installation
 
