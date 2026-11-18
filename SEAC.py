@@ -7,7 +7,7 @@ from scipy.spatial import KDTree
 
 SEAC260314 = {
     "SASP": ["IL1B", "IL6", "CXCL12", "CCL2", "CXCL8", "TGFB1", "VEGFA"],
-    "EMC": ["PLAUR", "PLAU", "PAPPA", "MMP14", "ADAMTS4", "COL6A1", "THBS1"],
+    "ECM": ["PLAUR", "PLAU", "PAPPA", "MMP14", "ADAMTS4", "COL6A1", "THBS1"],
     "Anti_Apoptotic": [
         "SERPINE1",
         "SERPINB2",
@@ -48,6 +48,11 @@ old_SEAC = {
     ],
 }
 
+newSEAC = {"SASP": ["IL1B", "IL6", "CCL7", "CXCL8", "CCL2", "CXCL2", "CD55",],
+           "Extra_Cellular_Matrix": ["PLAUR", "PLAU", "TNC", "VCAM1", "ADAMTS4", "TMEM217", "ICAM4",],
+           "Anti_Apoptotic": ["SERPINE1", "SERPINB2", "BCL2L1", "GZMB", "RELT", "MCL1", "CDK1",],
+           "Cell_Cycle_Related": ["CDKN1A", "TP53", "GADD45A", "CDKN2A", "CCNB1", "CCNB2",],
+          }
 
 SEAC = SEAC260314
 
